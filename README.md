@@ -45,7 +45,7 @@ http://pm2.keymetrics.io/docs/usage/quick-start/
     # check logs for succesfull initialization:
     pm2 logs mlflow.sh
     ```
-    mlflow.sh must have execution rights, if the above 
+    _mlflow.sh must have execution rights_
 3. If you want MLFlow UI to start on every reboot:
     ```
     pm2 save

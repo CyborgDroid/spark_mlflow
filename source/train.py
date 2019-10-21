@@ -67,7 +67,7 @@ grid_params = {
     'stepSize': [0.15]
 }
 print(grid_params)
-best_model, submodels, train_df, test_df = SparkMethods.grid_search_GBT(
+cv_model, train_df, test_df = SparkMethods.grid_search_GBT(
                                             trainingData, 
                                             testData,
                                             evaluator='MulticlassClassificationEvaluator',

@@ -404,21 +404,21 @@ class SparkMethods:
             params_map = crossval.getEstimatorParamMaps()
 
             # Run cross-validation, and choose the best set of parameters.
-            model = crossval.fit(train_df)
-            transformed_train_df = model.bestModel.transform(train_df)
-            transformed_test_df = model.bestModel.transform(test_df)
+            cv_model = crossval.fit(train_df)
+            train_df = cv_model.bestModel.transform(train_df)
+            test_df = cv_model.bestModel.transform(test_df)
             # Log Parameters, Metrics, and all models with MLFlow
 
-            bestModel = model.bestModel
-            subModels = model.subModels
+            bestModel = cv_model.bestModel
+            subModels = cv_model.subModels
 
             #log params and metrics for all runs with MLFlow
             for i, fold in enumerate(subModels):
                 # print('\n***Fold ' + str(i + 1) + '***\n')
                 for x, model in enumerate(fold):
                     # print('\nModel ' + str(x + 1))
-                    train_metrics = SparkMethods.get_MultiClassMetrics(transformed_train_df, model, data_type='train', label_col=label_col)
-                    test_metrics = SparkMethods.get_MultiClassMetrics(transformed_test_df, model, data_type='test', label_col=label_col)
+                    train_metrics = SparkMethods.get_MultiClassMetrics(train_df, model, data_type='train', label_col=label_col)
+                    test_metrics = SparkMethods.get_MultiClassMetrics(test_df, model, data_type='test', label_col=label_col)
                     with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
                         model_stages_params = SparkMethods.get_model_params(model)
                         for stage_params in model_stages_params:
@@ -428,8 +428,8 @@ class SparkMethods:
            
             # log best model, params, and metrics with MLFlow
             params_stages_bestModel = SparkMethods.get_model_params(bestModel)
-            train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(transformed_train_df, model, data_type='train', label_col=label_col)
-            test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(transformed_train_df, model, data_type='test', label_col=label_col)
+            train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', label_col=label_col)
+            test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', label_col=label_col)
             for params_stages in params_stages_bestModel:
                 mlflow.log_params(params_stages)
             mlflow.set_tag('model', model_file_name)
@@ -438,7 +438,7 @@ class SparkMethods:
             import mlflow.spark
             mlflow.spark.log_model(bestModel, model_file_name)
 
-        return bestModel, subModels, transformed_train_df, transformed_test_df
+        return model, train_df, test_df
 
     @staticmethod
     def get_MultiClassMetrics(df, model, data_type='train', label_col='label'):
