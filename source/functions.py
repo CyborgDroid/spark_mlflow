@@ -249,6 +249,7 @@ class SparkMethods:
         # with mlflow.start_run(experiment_id=experimentID,run_name='vectorizer', nested=True):
         params = {'CategoricalCols': CategoricalCols, 'MinMaxCols': MinMaxCols}
         params.update(labels_to_vectorize)
+        mlflow.set_tag('type', 'vectorizer')
         mlflow.log_params(params)
         # create all requried column names
         cat_index_cols = [c + '_index' for c in CategoricalCols]
@@ -312,112 +313,178 @@ class SparkMethods:
                    for t in conf)
 
     @staticmethod
+    def get_model_params(model):
+        """Get params for a spark model (bestModel or subModels)
+        
+        Arguments:
+            model {spark model}
+        
+        Returns:
+            [dict] -- List of dicts with the params for all stages in the model
+        """
+        # get names for all stages
+        stage_names = [s.uid for s in model.stages]
+        # get params for all stages
+        all_params = []
+        for s in model.stages:
+            p = {
+                'stage' : s.uid
+            }
+            raw_params = s.extractParamMap()
+            p.update({p.name:raw_params.get(p) for p in raw_params})
+            all_params.append(p)
+        return all_params
+
+    @staticmethod
     def grid_search_GBT(
-            df,
-            evaluator=MulticlassClassificationEvaluator,
+            train_df, test_df,
+            evaluator='MulticlassClassificationEvaluator',
             label_col='label',
             features_col='features',
+            model_file_name='bestGBT',
             grid_params={
                 'maxDepth': [3, 5, 7],
                 'maxBins': [8, 16, 32],
                 'maxIter': [25, 50, 100],
                 'stepSize': [0.15, 0.2, 0.25]
             }):
-        """Grid search for GradientBoostedTrees. This will only log all run parameters and metrics when used in databricks
-
+        """Grid search for GradientBoostedTrees.
+        
         Arguments:
-            df {[type]} -- [description]
-
+            train_df {[type]} -- [description]
+            test_df {[type]} -- [description]
+        
         Keyword Arguments:
+            evaluator {str} -- [description] (default: {'MulticlassClassificationEvaluator'})
             label_col {str} -- [description] (default: {'label'})
             features_col {str} -- [description] (default: {'features'})
-            grid_params {dict} -- [description] (default: {{'maxDepth':[3,5], 'maxBins':[16,32], 'maxIter': [25,50,100], 'stepSize':[0.15,0.2,0.25]}})
-
+            model_file_name {str} -- [filename for the model] (default: {'bestGBT'})
+            grid_params {dict} -- [description] (default: {{'maxDepth': [3, 5, 7],'maxBins': [8, 16, 32],'maxIter': [25, 50, 100],'stepSize': [0.15, 0.2, 0.25]}})
+        
         Returns:
             [type] -- [description]
         """
         # if not SparkMethods.is_databricks_autotracking_enabled():
 
         # MLFlow logs
-        # import mlflow
-        # today = date.today()
-        # experimentPath = today.strftime("%Y%m%d")
-        # try:
-        #     experimentID = mlflow.create_experiment(experimentPath)
-        # except MlflowException:
-        #     experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
-        #     mlflow.set_experiment(experimentPath)
-        # with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
-        # Train a GBT model.
-        gbt = GBTClassifier(featuresCol=features_col,
-                            labelCol=label_col,
-                            predictionCol='predicted_' + label_col)
-        pipeline = Pipeline().setStages([gbt])
+        import mlflow
+        today = date.today()
+        experimentPath = today.strftime("%Y%m%d")
+        try:
+            experimentID = mlflow.create_experiment(experimentPath)
+        except MlflowException:
+            experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
+        
+        # start nested mlflow experiement
+        with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
+            # Train a GBT model.
+            gbt = GBTClassifier(featuresCol=features_col,
+                                labelCol=label_col,
+                                predictionCol='predicted_' + label_col)
+            pipeline = Pipeline().setStages([gbt])
 
-        # train:
-        paramGrid = ParamGridBuilder() \
-            .addGrid(gbt.maxDepth, grid_params['maxDepth'])\
-            .addGrid(gbt.maxBins, grid_params['maxBins'])\
-            .addGrid(gbt.maxIter, grid_params['maxIter'])\
-            .addGrid(gbt.stepSize, grid_params['stepSize'])\
-            .build()
+            # train:
+            paramGrid = ParamGridBuilder() \
+                .addGrid(gbt.maxDepth, grid_params['maxDepth'])\
+                .addGrid(gbt.maxBins, grid_params['maxBins'])\
+                .addGrid(gbt.maxIter, grid_params['maxIter'])\
+                .addGrid(gbt.stepSize, grid_params['stepSize'])\
+                .build()
 
-        # cross validate using 80% of the CPUs
-        crossval = CrossValidator(
-            estimator=pipeline,
-            estimatorParamMaps=paramGrid,
-            evaluator=MulticlassClassificationEvaluator(),
-            seed=24,
-            parallelism=round(os.cpu_count() * 0.8),
-            numFolds=3,
-            collectSubModels=True)
+            # cross validate using 80% of the CPUs
+            crossval = CrossValidator(
+                estimator=pipeline,
+                estimatorParamMaps=paramGrid,
+                evaluator=MulticlassClassificationEvaluator(predictionCol='predicted_' + label_col, labelCol=label_col),
+                seed=24,
+                parallelism=round(os.cpu_count() * 0.8),
+                numFolds=5,
+                collectSubModels=True)
 
-        params_map = crossval.getEstimatorParamMaps()
+            params_map = crossval.getEstimatorParamMaps()
 
-        # Run cross-validation, and choose the best set of parameters.
-        model = crossval.fit(df)
-        transformed_df = model.bestModel.transform(df)
+            # Run cross-validation, and choose the best set of parameters.
+            model = crossval.fit(train_df)
+            transformed_train_df = model.bestModel.transform(train_df)
+            transformed_test_df = model.bestModel.transform(test_df)
+            # Log Parameters, Metrics, and all models with MLFlow
 
-        bestModel = model.bestModel
-        subModels = model.subModels
+            bestModel = model.bestModel
+            subModels = model.subModels
 
-        return bestModel, subModels, params_map, transformed_df
+            #log params and metrics for all runs with MLFlow
+            for i, fold in enumerate(subModels):
+                # print('\n***Fold ' + str(i + 1) + '***\n')
+                for x, model in enumerate(fold):
+                    # print('\nModel ' + str(x + 1))
+                    train_metrics = SparkMethods.get_MultiClassMetrics(transformed_train_df, model, data_type='train', label_col=label_col)
+                    test_metrics = SparkMethods.get_MultiClassMetrics(transformed_test_df, model, data_type='test', label_col=label_col)
+                    with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
+                        model_stages_params = SparkMethods.get_model_params(model)
+                        for stage_params in model_stages_params:
+                            mlflow.log_params(stage_params)
+                        mlflow.log_metrics(train_metrics)
+                        mlflow.log_metrics(test_metrics)
+           
+            # log best model, params, and metrics with MLFlow
+            params_stages_bestModel = SparkMethods.get_model_params(bestModel)
+            train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(transformed_train_df, model, data_type='train', label_col=label_col)
+            test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(transformed_train_df, model, data_type='test', label_col=label_col)
+            for params_stages in params_stages_bestModel:
+                mlflow.log_params(params_stages)
+            mlflow.set_tag('model', model_file_name)
+            mlflow.log_metrics(train_metrics_bestModel)
+            mlflow.log_metrics(test_metrics_bestModel)
+            import mlflow.spark
+            mlflow.spark.log_model(bestModel, model_file_name)
+
+        return bestModel, subModels, transformed_train_df, transformed_test_df
 
     @staticmethod
-    def get_MultiClassMetrics(df, label_col, model):
-        transformed_df = model.transform(df)
-        print('\nRESULTS FOR ' + p.upper())
-        predictionAndLabels = transformed_df.select(
+    def get_MultiClassMetrics(df, model, data_type='train', label_col='label'):
+        """[summary]
+        
+        Arguments:
+            df {pyspark.sql.dataframe.DataFrame}
+            model {pyspark.ml.pipeline.PipelineModel} 
+        
+        Keyword Arguments:
+            data_type {str} -- train/test/val - will be appended to metric keys (default: {'train'})
+            label_col {str} -- Column name for the actual label (default: {'label'})
+        
+        Returns:
+            {dict} -- Dictionary of model metrics ready to log to MLFlow or print
+        """
+        # if the DF has not been transformed by the model, apply model.
+        if 'predicted_'+label_col not in df.columns:
+            df = model.transform(df)
+
+        predictionAndLabels = df.select(
             F.col('predicted_' + label_col).cast(T.FloatType()),
             F.col(label_col).cast(T.FloatType())).rdd
 
         metrics = MulticlassMetrics(predictionAndLabels)
 
         # Overall statistics
-        precision = metrics.precision()
-        recall = metrics.recall()
-        f1Score = metrics.fMeasure()
-        # print("Summary Stats")
-        # print("Precision = %s" % precision)
-        # print("Recall = %s" % recall)
-        # print("F1 Score = %s" % f1Score)
+        log_metrics = {
+            data_type + 'Precision' : metrics.precision(),
+            data_type + 'Recall' : metrics.recall(),
+            data_type + 'F1Score' : metrics.fMeasure(),
+            data_type + 'WeightedRecall': metrics.weightedRecall,
+            data_type + 'WeightedPrecision': metrics.weightedPrecision,
+            data_type + 'WeightedF1Score': metrics.weightedFMeasure(),
+            data_type + 'WeightedF0.5Score': metrics.weightedFMeasure(beta=0.5),
+            data_type + 'WeightedFalsePositiveRate': metrics.weightedFalsePositiveRate 
+        }
 
-        # # Statistics by class
-        # labels = [0.0, 1.0]
-        # for label in sorted(labels):
-        #     print("Class %s precision = %s" % (label, metrics.precision(label)))
-        #     print("Class %s recall = %s" % (label, metrics.recall(label)))
-        #     print("Class %s F1 Measure = %s" % (label, metrics.fMeasure(label, beta=1.0)))
-        #     mlflow.log_metric('Train_recall_' + str(label),  float(metrics.recall(label)))
-        #     mlflow.log_metric('Train_precision_' + str(label),  float(metrics.precision(label)))
-        #     mlflow.log_metric('Train_F1_score_' + str(label),  float(metrics.fMeasure(label, beta=1.0)))
+        # get labels (ex: 0.0 and 1.0)
+        labels = [x[label_col] for x in df.select(label_col).distinct().collect()]
+        for label in sorted(labels):
+            log_metrics.update({data_type + 'Recall' + str(label): float(metrics.recall(label))})
+            log_metrics.update({data_type + 'Precision' + str(label):float(metrics.precision(label))})
+            log_metrics.update({data_type + 'F1Score' + str(label): float(metrics.fMeasure(label, beta=1.0))})
 
-        # # Weighted stats
-        # print("Weighted recall = %s" % metrics.weightedRecall)
-        # print("Weighted precision = %s" % metrics.weightedPrecision)
-        print("Weighted F(1) Score = %s" % metrics.weightedFMeasure())
-        # print("Weighted F(0.5) Score = %s" % metrics.weightedFMeasure(beta=0.5))
-        # print("Weighted false positive rate = %s" % metrics.weightedFalsePositiveRate)
+        return log_metrics
 
     @staticmethod
     def train_GBT(df, label_col='label', features_col='features'):

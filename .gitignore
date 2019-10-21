@@ -1,3 +1,4 @@
 mlruns
 data/
 __pycache__
+.vscode
