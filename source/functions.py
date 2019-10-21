@@ -216,7 +216,8 @@ class SparkMethods:
     def vectorizer(df,
                    labels_to_vectorize={'label': 'OneHotEncoderEstimator'},
                    CategoricalCols=[],
-                   MinMaxCols=[]):
+                   MinMaxCols=[],
+                   vectorizer_file_name='vectorizer'):
         """
         Vectorizes categorical columns and numerical columns that can be scaled.
         Currently only supports one label
@@ -249,7 +250,7 @@ class SparkMethods:
         # with mlflow.start_run(experiment_id=experimentID,run_name='vectorizer', nested=True):
         params = {'CategoricalCols': CategoricalCols, 'MinMaxCols': MinMaxCols}
         params.update(labels_to_vectorize)
-        mlflow.set_tag('type', 'vectorizer')
+        mlflow.set_tag('vectorizer', vectorizer_file_name)
         mlflow.log_params(params)
         # create all requried column names
         cat_index_cols = [c + '_index' for c in CategoricalCols]
@@ -294,7 +295,7 @@ class SparkMethods:
         # Train model.  This also runs the indexers.
         model = pipeline.fit(df)
         import mlflow.spark
-        mlflow.spark.log_model(model, artifact_path='vectorizer')
+        mlflow.spark.log_model(model, artifact_path=vectorizer_file_name)
         transformed_df = model.transform(df)
         return model, transformed_df
 
@@ -405,8 +406,7 @@ class SparkMethods:
 
             # Run cross-validation, and choose the best set of parameters.
             cv_model = crossval.fit(train_df)
-            train_df = cv_model.bestModel.transform(train_df)
-            test_df = cv_model.bestModel.transform(test_df)
+
             # Log Parameters, Metrics, and all models with MLFlow
 
             bestModel = cv_model.bestModel
@@ -420,25 +420,30 @@ class SparkMethods:
                     train_metrics = SparkMethods.get_MultiClassMetrics(train_df, model, data_type='train', label_col=label_col)
                     test_metrics = SparkMethods.get_MultiClassMetrics(test_df, model, data_type='test', label_col=label_col)
                     with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
+                        mlflow.log_param('Model', x + 1)
+                        mlflow.log_param('Kfold', i + 1)
                         model_stages_params = SparkMethods.get_model_params(model)
                         for stage_params in model_stages_params:
                             mlflow.log_params(stage_params)
                         mlflow.log_metrics(train_metrics)
                         mlflow.log_metrics(test_metrics)
            
-            # log best model, params, and metrics with MLFlow
-            params_stages_bestModel = SparkMethods.get_model_params(bestModel)
-            train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', label_col=label_col)
-            test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', label_col=label_col)
-            for params_stages in params_stages_bestModel:
-                mlflow.log_params(params_stages)
-            mlflow.set_tag('model', model_file_name)
-            mlflow.log_metrics(train_metrics_bestModel)
-            mlflow.log_metrics(test_metrics_bestModel)
-            import mlflow.spark
-            mlflow.spark.log_model(bestModel, model_file_name)
+        # log best model, params, and metrics with MLFlow
+        params_stages_bestModel = SparkMethods.get_model_params(bestModel)
+        train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', label_col=label_col)
+        test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', label_col=label_col)
+        for params_stages in params_stages_bestModel:
+            mlflow.log_params(params_stages)
+        mlflow.set_tag('model', model_file_name)
+        mlflow.log_metrics(train_metrics_bestModel)
+        mlflow.log_metrics(test_metrics_bestModel)
+        import mlflow.spark
+        mlflow.spark.log_model(bestModel, model_file_name)
 
-        return model, train_df, test_df
+        train_df = cv_model.bestModel.transform(train_df)
+        test_df = cv_model.bestModel.transform(test_df)
+
+        return cv_model, train_df, test_df
 
     @staticmethod
     def get_MultiClassMetrics(df, model, data_type='train', label_col='label'):

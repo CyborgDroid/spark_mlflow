@@ -6,21 +6,21 @@ import mlflow
 import os, sys, io
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from source.functions import SparkMethods, DataLoader
-from mlflow.exceptions import MlflowException
-from mlflow.tracking import MlflowClient
-from datetime import date
-today = date.today()
+# from mlflow.exceptions import MlflowException
+# from mlflow.tracking import MlflowClient
+# from datetime import date
+# today = date.today()
 
-experimentPath = today.strftime("%Y%m%d")
+# experimentPath = today.strftime("%Y%m%d")
 
-try:
-    experimentID = mlflow.create_experiment(experimentPath)
-    print('created new MLFlow Experiment')
-except MlflowException:
-    print('Using existing MLFlow Experiment')
-    experimentID = MlflowClient().get_experiment_by_name(
-        experimentPath).experiment_id
-    mlflow.set_experiment(experimentPath)
+# try:
+#     experimentID = mlflow.create_experiment(experimentPath)
+#     print('created new MLFlow Experiment')
+# except MlflowException:
+#     print('Using existing MLFlow Experiment')
+#     experimentID = MlflowClient().get_experiment_by_name(
+#         experimentPath).experiment_id
+#     mlflow.set_experiment(experimentPath)
 
 spark = SparkMethods.get_spark_session()
 
@@ -78,10 +78,8 @@ cv_model, train_df, test_df = SparkMethods.grid_search_GBT(
 
 #%%
 
-best_model.featureImportances
+cv_model.bestModel.extractParamMap()
 
 #%%
-
-mlflow.get_artifact_uri().replace('file://','')+'/'
-
+cv_model.explainParams()
 #%%
