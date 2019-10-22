@@ -15,9 +15,9 @@ from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClass
 from pyspark.mllib.evaluation import MulticlassMetrics, BinaryClassificationMetrics
 from pyspark.ml import Pipeline
 import os
+import mlflow
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
-import mlflow
 from datetime import date
 from pathlib import Path
 
@@ -237,15 +237,17 @@ class SparkMethods:
             [vectorizer, transformed_df] -- Returns vectorizer model and transformed DF
         """
         # MLFlow logs
+        experimentPath = date.today().strftime("%Y%m%d")
         import mlflow
-        today = date.today()
-        experimentPath = today.strftime("%Y%m%d")
+        print(experimentPath)
         try:
+            print('created new MLFlow Experiment')
             experimentID = mlflow.create_experiment(experimentPath)
         except MlflowException:
+            print('Using existing MLFlow Experiment')
             experimentID = MlflowClient().get_experiment_by_name(
                 experimentPath).experiment_id
-            mlflow.set_experiment(experimentPath)
+        mlflow.set_experiment(experimentPath)
 
         # with mlflow.start_run(experiment_id=experimentID,run_name='vectorizer', nested=True):
         params = {'CategoricalCols': CategoricalCols, 'MinMaxCols': MinMaxCols}
@@ -343,6 +345,7 @@ class SparkMethods:
             label_col='label',
             features_col='features',
             model_file_name='bestGBT',
+            kfolds=5,
             grid_params={
                 'maxDepth': [3, 5, 7],
                 'maxBins': [8, 16, 32],
@@ -356,9 +359,9 @@ class SparkMethods:
             test_df {[type]} -- [description]
         
         Keyword Arguments:
-            evaluator {str} -- [description] (default: {'MulticlassClassificationEvaluator'})
-            label_col {str} -- [description] (default: {'label'})
-            features_col {str} -- [description] (default: {'features'})
+            evaluator {str} -- [To be added to enable BinaryClassificationEvaluator and metrics] (default: {'MulticlassClassificationEvaluator'})
+            label_col {str} -- [The target label column] (default: {'label'})
+            features_col {str} -- [column with sparse matrix features] (default: {'features'})
             model_file_name {str} -- [filename for the model] (default: {'bestGBT'})
             grid_params {dict} -- [description] (default: {{'maxDepth': [3, 5, 7],'maxBins': [8, 16, 32],'maxIter': [25, 50, 100],'stepSize': [0.15, 0.2, 0.25]}})
         
@@ -372,8 +375,10 @@ class SparkMethods:
         today = date.today()
         experimentPath = today.strftime("%Y%m%d")
         try:
+            print('created new MLFlow Experiment GBT') 
             experimentID = mlflow.create_experiment(experimentPath)
         except MlflowException:
+            print('Using existing MLFlow Experiment GBT') 
             experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
         
         # start nested mlflow experiement
@@ -399,7 +404,7 @@ class SparkMethods:
                 evaluator=MulticlassClassificationEvaluator(predictionCol='predicted_' + label_col, labelCol=label_col),
                 seed=24,
                 parallelism=round(os.cpu_count() * 0.8),
-                numFolds=5,
+                numFolds=kfolds,
                 collectSubModels=True)
 
             params_map = crossval.getEstimatorParamMaps()
@@ -421,7 +426,8 @@ class SparkMethods:
                     test_metrics = SparkMethods.get_MultiClassMetrics(test_df, model, data_type='test', label_col=label_col)
                     with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
                         mlflow.log_param('Model', x + 1)
-                        mlflow.log_param('Kfold', i + 1)
+                        mlflow.log_param('current_Kfold', i + 1)
+                        mlflow.log_param('numKfolds', kfolds)
                         model_stages_params = SparkMethods.get_model_params(model)
                         for stage_params in model_stages_params:
                             mlflow.log_params(stage_params)
@@ -439,15 +445,15 @@ class SparkMethods:
         mlflow.log_metrics(test_metrics_bestModel)
         import mlflow.spark
         mlflow.spark.log_model(bestModel, model_file_name)
-
         train_df = cv_model.bestModel.transform(train_df)
         test_df = cv_model.bestModel.transform(test_df)
+        mlflow.end_run()
 
         return cv_model, train_df, test_df
 
     @staticmethod
     def get_MultiClassMetrics(df, model, data_type='train', label_col='label'):
-        """[summary]
+        """Get multiclass metrics (this needs to be distributed with multiprocessing to speed up grid search)
         
         Arguments:
             df {pyspark.sql.dataframe.DataFrame}
