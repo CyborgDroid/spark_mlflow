@@ -2,20 +2,30 @@
 
 The purpose of this project is to create a complete example of how MLFlow can be used in an end to end Model Management setting. Databricks comes with MLFlow auto-tracking, which is partially replicated here for use outside of Databricks.
 
-Basic EDA using custom spark describe + pandas_profiling:
+Basic EDA using custom spark describe + pandas_profiling: (_finished_)
 
 1. Custom spark describe + EDA: [./source/data_exploration.py](./source/data_exploration.py)
 2. Pandas-profiling report: [./reports/overview.html](./reports/overview.html)
 
-Stratified TrainTestSplit in Spark (missing out of the box)
+Stratified TrainTestSplit in Spark (missing out of the box) (_finished_)
 
 Demonstration of how to use MLFlow to:
-1. Log nested runs with Spark MLlib vectorizers and CrossValidation / GridSearch outside of Databricks
-2. Log nested runs with Genetic Algorithm for Hyperparameter Optimization instead of GridSearch (To be added)
-2. Predict with a saved model via a script. (To be added)
-3. Create a microservice API of the model: (To be added)
-    - via terminal
-    - dockerized service 
+1. Log nested runs with Spark MLlib vectorizers and CrossValidation / GridSearch outside of Databricks (_finished_)
+2. Classifier multi-algorithm grid search:
+    - GradientBoostedTrees (_finished_)
+    - LinearSVC (_finished_)
+    - Multi-layer Perceptron (MLP) (_TBD_)
+    - LogisticRegression (_TBD_)
+3. Log nested runs with Genetic Algorithm for Hyperparameter Optimization instead of GridSearch (_TBD_)
+4. Predict with a saved model via a script. (_finished_)
+5. Create a microservice API of the model:
+    - via terminal (_TBD_)
+    - dockerized service [./source/test_API.py](./source/test_API.py) (_finished but need to combine with vectorizer to avoid having two services. Separated to enhance performace, see below_)
+
+Other features:
+1. Performance optimizations:
+    - Paralellized cross validation to use 80% of CPUs (CPUs = threaded logical cores or 2x physical cores) (_finished_) 
+    - Vectorize once rather than during each cross-validation (_finished_) re-integrating the vectorizer pipeline with model pipeline until after training is complete (_TBD_)
 
 ### Configure conda/miniconda ###
 
@@ -111,6 +121,8 @@ trainingData, testData = SparkMethods.train_test_split(
 
 
 ## MLFlow with a GradientBoostedTrees Classifier Grid Seacrh (CrossValidator) ##
+
+_Will be updated to include example with LinearSVC and MLP_
 
 This grid search has 54 combinations tested on 5 folds. If you have a regular laptop, try using fewer hyperparameter options before visualizing which settings work best using the MLFlow UI to tweak and repeat.
 
