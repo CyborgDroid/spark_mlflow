@@ -2,9 +2,9 @@
 # Import packages and data
 import pyspark.sql.functions as F
 import pyspark.sql.types as T
-import os, sys, io
+import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from source.functions import SparkMethods, DataLoader
+from source.functions import SparkMethods, DataLoader, SparkMLBinaryClassifier
 
 spark = SparkMethods.get_spark_session()
 
@@ -23,7 +23,7 @@ scaling_cols = [
 
 #%%
 #create vectorizer model and transform df
-vectorizer, transformed_df = SparkMethods.vectorizer(
+vectorizer, label_vectorizer, transformed_df = SparkMethods.vectorizer(
     df,
     labels_to_vectorize={'income': 'OneHotEncoderEstimator'},
     CategoricalCols=categorical_cols,
@@ -40,28 +40,48 @@ trainingData, testData = SparkMethods.train_test_split(
     show_summary=True)
 
 #%%
-# Gradient-boosted tree classifier pipeline
+# Gradient-boosted tree and LSVC grid searches
 
-grid_params = {
-    'maxDepth': [4,5,6],
-    'maxBins': [32,40,48],
+GBT_params = {
+    'maxDepth': [5],
+    'maxBins': [48, 64],
     'maxIter': [25],
-    'stepSize': [0.15]
+    'stepSize': [0.1, 0.15]
 }
-print(grid_params)
-cv_model, train_df, test_df = SparkMethods.grid_search_GBT(
+
+LSVC_params = {
+    'standardization': [True],
+    'aggregationDepth': [2, 5, 10],
+    'regParam': [0.001, 0.01],
+    'maxIter': [25],
+    'tol': [1e-6, 1e-4]
+}
+
+MLP_params = {
+    'max_hidden_layers': 3,
+    'blockSize': [2, 5, 10],
+    'stepSize': [0.001, 0.01],
+    'maxIter': [25],
+    'tol': [1e-6, 1e-4]
+}
+
+grid_search_results = SparkMLBinaryClassifier(
     trainingData,
     testData,
     evaluator='MulticlassClassificationEvaluator',
     label_col='label',
     features_col='features',
-    kfolds=5,
-    grid_params=grid_params)
+    kfolds=3,
+    GBT_params=GBT_params,
+    LSVC_params=LSVC_params,
+    MLP_params=MLP_params)
+
+#%%
 
 #%%
 #explain params
 
-param_map = cv_model.bestModel.stages[0].extractParamMap()
+param_map = grid_search_results.models['GBT'].bestModel.stages[0].extractParamMap()
 
 for p in param_map:
     print(p.name + '\n\t' + p.doc)
