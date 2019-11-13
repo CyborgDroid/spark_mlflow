@@ -8,7 +8,7 @@ from configparser import RawConfigParser
 from pathlib import Path
 import pandas_profiling
 from pyspark.ml import Pipeline
-from pyspark.ml.classification import GBTClassifier, LinearSVC, MultilayerPerceptronClassifier, LogisticRegression
+from pyspark.ml.classification import GBTClassifier, LinearSVC, MultilayerPerceptronClassifier, LogisticRegression, RandomForestClassifier
 from pyspark.ml.feature import ChiSqSelector, StringIndexer, OneHotEncoderEstimator, VectorAssembler, MinMaxScaler, IndexToString, SQLTransformer
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
@@ -20,6 +20,7 @@ from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 from datetime import date
 from pathlib import Path
+import random
 
 class GeneralMethods:
     @staticmethod
@@ -31,15 +32,15 @@ class SparkMethods:
     """General Spark methods including Exploratory Data Analysis, ETL, MLlib, and MLFlow.
     """
     @staticmethod
-    def get_spark_session():
+    def get_spark_session(appName='spark_mlflow', master='local[*]'):
         """Get databricks or current spark session or create a new one
 
         Returns:
             pyspark.sql.session.SparkSession
         """
         return SparkSession.builder\
-            .appName("spark_mlflow")\
-            .master("local[*]")\
+            .appName(appName)\
+            .master(master)\
             .config("spark.sql.execution.arrow.enabled", "true")\
             .config("spark.sql.execution.arrow.fallback.enabled", "true")\
             .getOrCreate()
@@ -304,6 +305,7 @@ class SparkMethods:
         transformed_df = vectorizer.transform(df)
         #label vectorizer is not saved to the regular vectorizer pipeline since new data will not be labelled
         transformed_df = label_vectorizer.transform(transformed_df)
+        mlflow.end_run()
         return vectorizer, label_vectorizer, transformed_df
 
     @staticmethod
@@ -396,7 +398,141 @@ class SparkMethods:
         if log_model:
             import mlflow.spark
             mlflow.spark.log_model(combined_model, 'vectorizer_and_' + model_file_name)
-        return 
+        return
+
+    @staticmethod
+    def build_param_grid(my_transformer, unmappedParams):
+        """Build a ParamMap from a python list of dictionaries containing parameters. Similar to ParamGridBuilder but with predefined param options instead of all combinations.
+        
+        Arguments:
+            my_transformer {Spark MLlib transformer} -- Any transformer. Ex: MultilayerPerceptronClassifier()
+            unmappedParams {List of dictionaries of parameters} -- Ex: [{'blockSize': 4, 'stepSize': 0.001, 'maxIter': 25, 'tol': 0.01, 'layers': [10, 10, 1]}, {'blockSize': 2, 'stepSize': 0.01, 'maxIter': 50, 'tol': 0.01, 'layers': [10, 18, 10, 2, 1]}]
+        
+        Returns:
+            [paramMap] -- Same structure as paramGridBuilder().addGrid(...).build()
+        """
+        paramMap = []
+        for p in unmappedParams:
+            params = {}
+            for k in p.keys():
+                # same as : params[MLP.blockSize]=p['blockSize']
+                params[getattr(my_transformer, k)]=p[k]
+            paramMap.append(params)
+        return paramMap
+
+    @staticmethod
+    def classifier_grid_search(
+            train_df, test_df,
+            model,
+            evaluator='MulticlassClassificationEvaluator',
+            label_col='label',
+            features_col='features',
+            kfolds=5,
+            grid_params={
+                'standardization': [True],
+                'aggregationDepth': [5, 7],
+                'regParam': [0.1, 1, 10],
+                'maxIter': [25, 50],
+                'tol': [1e-6, 1e-4, 1e-2]
+            }):
+        """Grid search for pyspark.ml.classification models such as: LinearSVC(), GBTClassifier(), LogisticRegression(), DecisionTreeClassifier(), RandomForestClassifier(), and NaiveBayes(). MultilayerPerceptronClassifier is supported but will not log the parameters in MLFlow.
+        
+        Arguments:
+            train_df {pyspark.sql.dataframe.DataFrame} -- training data
+            test_df {pyspark.sql.dataframe.DataFrame} -- testing data
+            model {Spark MLlib Classifier} -- classifier model to use ex: LinearSVC()
+        
+        Keyword Arguments:
+            evaluator {str} -- [To be added to enable BinaryClassificationEvaluator and metrics] (default: {'MulticlassClassificationEvaluator'})
+            label_col {str} -- [The target label column] (default: {'label'})
+            features_col {str} -- [column with sparse matrix features] (default: {'features'})
+            grid_params {dict} -- [description] (default: {{'maxDepth': [3, 5, 7],'maxBins': [8, 16, 32],'maxIter': [25, 50, 100],'stepSize': [0.15, 0.2, 0.25]}})
+        
+        Returns:
+            [type] -- [description]
+        """
+        # MLFlow logs
+        import mlflow
+        today = date.today()
+        experimentPath = today.strftime("%Y%m%d")
+        model_name = str(model).split('_')[0]
+        try:
+            experimentID = mlflow.create_experiment(experimentPath)
+            print('created new MLFlow Experiment for ' + model_name) 
+        except MlflowException:
+            experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
+            print('Using existing MLFlow Experiment for ' + model_name) 
+        
+        # start nested mlflow experiement
+        with mlflow.start_run(experiment_id=experimentID,run_name=model_name, nested=True):
+            # Train a GBT model.
+            model.setFeaturesCol(features_col)
+            model.setLabelCol(label_col)
+            model.setPredictionCol('predicted_' + label_col)     
+            
+            pipeline = Pipeline().setStages([model])
+            
+            # add all parameters to the paramGridBuilder to build all combinations
+            paramGrid = ParamGridBuilder()
+            for key, value in grid_params.items():
+                paramGrid.addGrid(getattr(model,key), value)
+
+            paramGrid = paramGrid.build()
+
+            # cross validate using 80% of the CPUs
+            crossval = CrossValidator(
+                estimator=pipeline,
+                estimatorParamMaps=paramGrid,
+                evaluator=MulticlassClassificationEvaluator(predictionCol='predicted_' + label_col, labelCol=label_col),
+                seed=1,
+                parallelism=round(os.cpu_count() * 0.8),
+                numFolds=kfolds,
+                collectSubModels=True)
+
+            params_map = crossval.getEstimatorParamMaps()
+
+            # Run cross-validation, and choose the best set of parameters.
+            cv_model = crossval.fit(train_df)
+
+            # Log Parameters, Metrics, and all models with MLFlow
+
+            bestModel = cv_model.bestModel
+            subModels = cv_model.subModels
+
+            #log params and metrics for all runs with MLFlow
+            for i, fold in enumerate(subModels):
+                # print('\n***Fold ' + str(i + 1) + '***\n')
+                for x, model in enumerate(fold):
+                    # print('\nModel ' + str(x + 1))
+                    train_metrics = SparkMethods.get_MultiClassMetrics(train_df, model, data_type='train', label_col=label_col)
+                    test_metrics = SparkMethods.get_MultiClassMetrics(test_df, model, data_type='test', label_col=label_col)
+                    with mlflow.start_run(experiment_id=experimentID,run_name=model_name, nested=True):
+                        mlflow.log_param('Model', x + 1)
+                        mlflow.log_param('current_Kfold', i + 1)
+                        mlflow.log_param('numKfolds', kfolds)
+                        model_stages_params = SparkMethods.get_model_params(model)
+                        for stage_params in model_stages_params:
+                            mlflow.log_params(stage_params)
+                        mlflow.log_metrics(train_metrics)
+                        mlflow.log_metrics(test_metrics)
+
+        # log best model, params, and metrics with MLFlow
+        params_stages_bestModel = SparkMethods.get_model_params(bestModel)
+        train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', label_col=label_col)
+        test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', label_col=label_col)
+        for params_stages in params_stages_bestModel:
+            mlflow.log_params(params_stages)
+        mlflow.set_tag('model', 'best_' + model_name)
+        mlflow.log_metrics(train_metrics_bestModel)
+        mlflow.log_metrics(test_metrics_bestModel)
+        import mlflow.spark
+        mlflow.spark.log_model(bestModel, 'best_' + model_name)
+        train_df = cv_model.bestModel.transform(train_df)
+        test_df = cv_model.bestModel.transform(test_df)
+        mlflow.end_run()
+
+        return cv_model
+
 
 class SparkMLBinaryClassifier:
     """[summary]
@@ -425,11 +561,27 @@ class SparkMLBinaryClassifier:
                 'tol': [1e-6, 1e-4, 1e-2]
             },
             MLP_params = {
-                'max_hidden_layers': 3,
+                'num_hidden_layers': range(1,5),
+                'first_hidden_layer_size': range(2,21,4), 
                 'blockSize': [2, 5, 10],
-                'stepSize': [0.001, 0.01],
+                'stepSize': [0.001, 0.01, 0.1],
+                'maxIter': [25, 50],
+                'tol': [1e-6, 1e-4, 1e-2]
+            },
+            LR_params = {
+                'standardization': [True],
+                'aggregationDepth': [5, 10],
+                'regParam': [0.001, 0.01],
                 'maxIter': [25],
+                'threshold':[0.5],
+                'elasticNetParam': [0.0, 0.5, 1],
                 'tol': [1e-6, 1e-4]
+            },
+            RandomForest_params = {
+                'maxDepth': [5],
+                'maxBins': [48],
+                'minInfoGain': [0.0, 0.05],
+                'impurity': ['gini', 'entropy']
             }):
         general_params = {
            'train_df': train_df, 
@@ -440,246 +592,15 @@ class SparkMLBinaryClassifier:
             'kfolds':kfolds 
         }
         self.models = {}
-        self.models['GBT'] = SparkMLBinaryClassifier.grid_search_GBT(**general_params, grid_params=GBT_params)
-        self.models['LSVC'] = SparkMLBinaryClassifier.grid_search_LSVC(**general_params, grid_params=LSVC_params)
+        self.models['GBT'] = SparkMethods.classifier_grid_search(**general_params, model=GBTClassifier(),grid_params=GBT_params)
+        self.models['LSVC'] = SparkMethods.classifier_grid_search(**general_params, model=LinearSVC(), grid_params=LSVC_params)
+        self.models['MLP'] = SparkMethods.classifier_grid_search(**general_params, model=MultilayerPerceptronClassifier(), grid_params=MLP_params)
+        self.models['LR'] = SparkMethods.classifier_grid_search(**general_params, model=LogisticRegression(), grid_params=LR_params)
+        self.models['RF'] = SparkMethods.classifier_grid_search(**general_params, model=RandomForestClassifier(), grid_params=RandomForest_params)
 
-
+    
     @staticmethod
-    def grid_search_GBT(
-            train_df, test_df,
-            evaluator='MulticlassClassificationEvaluator',
-            label_col='label',
-            features_col='features',
-            model_file_name='bestGBT',
-            kfolds=5,
-            grid_params={
-                'maxDepth': [3, 5, 7],
-                'maxBins': [8, 16, 32],
-                'maxIter': [25, 50, 100],
-                'stepSize': [0.15, 0.2, 0.25]
-            }):
-        """Grid search for GradientBoostedTrees.
-        
-        Arguments:
-            train_df {[type]} -- [description]
-            test_df {[type]} -- [description]
-        
-        Keyword Arguments:
-            evaluator {str} -- [To be added to enable BinaryClassificationEvaluator and metrics] (default: {'MulticlassClassificationEvaluator'})
-            label_col {str} -- [The target label column] (default: {'label'})
-            features_col {str} -- [column with sparse matrix features] (default: {'features'})
-            model_file_name {str} -- [filename for the model] (default: {'bestGBT'})
-            grid_params {dict} -- [description] (default: {{'maxDepth': [3, 5, 7],'maxBins': [8, 16, 32],'maxIter': [25, 50, 100],'stepSize': [0.15, 0.2, 0.25]}})
-        
-        Returns:
-            [type] -- [description]
-        """
-        # if not SparkMethods.is_databricks_autotracking_enabled():
-
-        # MLFlow logs
-        import mlflow
-        today = date.today()
-        experimentPath = today.strftime("%Y%m%d")
-        try:
-            print('created new MLFlow Experiment GBT') 
-            experimentID = mlflow.create_experiment(experimentPath)
-        except MlflowException:
-            print('Using existing MLFlow Experiment GBT') 
-            experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
-        
-        # start nested mlflow experiement
-        with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
-            # Train a GBT model.
-            gbt = GBTClassifier(featuresCol=features_col,
-                                labelCol=label_col,
-                                predictionCol='predicted_' + label_col)
-            
-            
-            pipeline = Pipeline().setStages([gbt])
-
-            # train:
-            paramGrid = ParamGridBuilder() \
-                .addGrid(gbt.maxDepth, grid_params['maxDepth'])\
-                .addGrid(gbt.maxBins, grid_params['maxBins'])\
-                .addGrid(gbt.maxIter, grid_params['maxIter'])\
-                .addGrid(gbt.stepSize, grid_params['stepSize'])\
-                .build()
-
-            # cross validate using 80% of the CPUs
-            crossval = CrossValidator(
-                estimator=pipeline,
-                estimatorParamMaps=paramGrid,
-                evaluator=MulticlassClassificationEvaluator(predictionCol='predicted_' + label_col, labelCol=label_col),
-                seed=1,
-                parallelism=round(os.cpu_count() * 0.8),
-                numFolds=kfolds,
-                collectSubModels=True)
-
-            params_map = crossval.getEstimatorParamMaps()
-
-            # Run cross-validation, and choose the best set of parameters.
-            cv_model = crossval.fit(train_df)
-
-            # Log Parameters, Metrics, and all models with MLFlow
-
-            bestModel = cv_model.bestModel
-            subModels = cv_model.subModels
-
-            #log params and metrics for all runs with MLFlow
-            for i, fold in enumerate(subModels):
-                # print('\n***Fold ' + str(i + 1) + '***\n')
-                for x, model in enumerate(fold):
-                    # print('\nModel ' + str(x + 1))
-                    train_metrics = SparkMethods.get_MultiClassMetrics(train_df, model, data_type='train', label_col=label_col)
-                    test_metrics = SparkMethods.get_MultiClassMetrics(test_df, model, data_type='test', label_col=label_col)
-                    with mlflow.start_run(experiment_id=experimentID,run_name='GBT-training', nested=True):
-                        mlflow.log_param('Model', x + 1)
-                        mlflow.log_param('current_Kfold', i + 1)
-                        mlflow.log_param('numKfolds', kfolds)
-                        model_stages_params = SparkMethods.get_model_params(model)
-                        for stage_params in model_stages_params:
-                            mlflow.log_params(stage_params)
-                        mlflow.log_metrics(train_metrics)
-                        mlflow.log_metrics(test_metrics)
-
-        # log best model, params, and metrics with MLFlow
-        print('here')
-        params_stages_bestModel = SparkMethods.get_model_params(bestModel)
-        train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', label_col=label_col)
-        test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', label_col=label_col)
-        for params_stages in params_stages_bestModel:
-            mlflow.log_params(params_stages)
-        mlflow.set_tag('model', model_file_name)
-        mlflow.log_metrics(train_metrics_bestModel)
-        mlflow.log_metrics(test_metrics_bestModel)
-        import mlflow.spark
-        mlflow.spark.log_model(bestModel, model_file_name)
-        train_df = cv_model.bestModel.transform(train_df)
-        test_df = cv_model.bestModel.transform(test_df)
-        mlflow.end_run()
-
-        return cv_model
-
-    @staticmethod
-    def grid_search_LSVC(
-            train_df, test_df,
-            evaluator='MulticlassClassificationEvaluator',
-            label_col='label',
-            features_col='features',
-            model_file_name='bestLSVC',
-            kfolds=5,
-            grid_params={
-                'standardization': [True, False],
-                'aggregationDepth': [2, 5, 7],
-                'regParam': [0.1, 1, 10],
-                'maxIter': [25, 50, 100],
-                'tol': [1e-6, 1e-4, 1e-2]
-            }):
-        """Grid search for Linear SVMs/SVCs.
-        
-        Arguments:
-            train_df {[type]} -- [description]
-            test_df {[type]} -- [description]
-        
-        Keyword Arguments:
-            evaluator {str} -- [To be added to enable BinaryClassificationEvaluator and metrics] (default: {'MulticlassClassificationEvaluator'})
-            label_col {str} -- [The target label column] (default: {'label'})
-            features_col {str} -- [column with sparse matrix features] (default: {'features'})
-            model_file_name {str} -- [filename for the model] (default: {'bestGBT'})
-            grid_params {dict} -- [description] (default: {{'maxDepth': [3, 5, 7],'maxBins': [8, 16, 32],'maxIter': [25, 50, 100],'stepSize': [0.15, 0.2, 0.25]}})
-        
-        Returns:
-            [type] -- [description]
-        """
-        # if not SparkMethods.is_databricks_autotracking_enabled():
-
-        # MLFlow logs
-        import mlflow
-        today = date.today()
-        experimentPath = today.strftime("%Y%m%d")
-        try:
-            print('created new MLFlow Experiment LSVC') 
-            experimentID = mlflow.create_experiment(experimentPath)
-        except MlflowException:
-            print('Using existing MLFlow Experiment LSVC') 
-            experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
-        
-        # start nested mlflow experiement
-        with mlflow.start_run(experiment_id=experimentID,run_name='LSVC-training', nested=True):
-            # Train a GBT model.
-            LSVC = LinearSVC(featuresCol=features_col,
-                                labelCol=label_col,
-                                predictionCol='predicted_' + label_col)
-            
-            
-            pipeline = Pipeline().setStages([LSVC])
-
-            # train:
-            paramGrid = ParamGridBuilder() \
-                .addGrid(LSVC.standardization, grid_params['standardization'])\
-                .addGrid(LSVC.aggregationDepth, grid_params['aggregationDepth'])\
-                .addGrid(LSVC.regParam, grid_params['regParam'])\
-                .addGrid(LSVC.maxIter, grid_params['maxIter'])\
-                .addGrid(LSVC.tol, grid_params['tol'])\
-                .build()
-
-            # cross validate using 80% of the CPUs
-            crossval = CrossValidator(
-                estimator=pipeline,
-                estimatorParamMaps=paramGrid,
-                evaluator=MulticlassClassificationEvaluator(predictionCol='predicted_' + label_col, labelCol=label_col),
-                seed=1,
-                parallelism=round(os.cpu_count() * 0.8),
-                numFolds=kfolds,
-                collectSubModels=True)
-
-            params_map = crossval.getEstimatorParamMaps()
-
-            # Run cross-validation, and choose the best set of parameters.
-            cv_model = crossval.fit(train_df)
-
-            # Log Parameters, Metrics, and all models with MLFlow
-
-            bestModel = cv_model.bestModel
-            subModels = cv_model.subModels
-
-            #log params and metrics for all runs with MLFlow
-            for i, fold in enumerate(subModels):
-                # print('\n***Fold ' + str(i + 1) + '***\n')
-                for x, model in enumerate(fold):
-                    # print('\nModel ' + str(x + 1))
-                    train_metrics = SparkMethods.get_MultiClassMetrics(train_df, model, data_type='train', label_col=label_col)
-                    test_metrics = SparkMethods.get_MultiClassMetrics(test_df, model, data_type='test', label_col=label_col)
-                    with mlflow.start_run(experiment_id=experimentID,run_name='LSVC-training', nested=True):
-                        mlflow.log_param('Model', x + 1)
-                        mlflow.log_param('current_Kfold', i + 1)
-                        mlflow.log_param('numKfolds', kfolds)
-                        model_stages_params = SparkMethods.get_model_params(model)
-                        for stage_params in model_stages_params:
-                            mlflow.log_params(stage_params)
-                        mlflow.log_metrics(train_metrics)
-                        mlflow.log_metrics(test_metrics)
-
-        # log best model, params, and metrics with MLFlow
-        print('here')
-        params_stages_bestModel = SparkMethods.get_model_params(bestModel)
-        train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', label_col=label_col)
-        test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', label_col=label_col)
-        for params_stages in params_stages_bestModel:
-            mlflow.log_params(params_stages)
-        mlflow.set_tag('model', model_file_name)
-        mlflow.log_metrics(train_metrics_bestModel)
-        mlflow.log_metrics(test_metrics_bestModel)
-        import mlflow.spark
-        mlflow.spark.log_model(bestModel, model_file_name)
-        train_df = cv_model.bestModel.transform(train_df)
-        test_df = cv_model.bestModel.transform(test_df)
-        mlflow.end_run()
-
-        return cv_model
-
-    @staticmethod
-    def grid_search_MLP(
+    def random_search_MLP(
             train_df, test_df,
             evaluator='MulticlassClassificationEvaluator',
             label_col='label',
@@ -687,11 +608,12 @@ class SparkMLBinaryClassifier:
             model_file_name='bestMLP',
             kfolds=5,
             grid_params = {
-                'max_hidden_layers': 3,
-                'blockSize': [2, 5, 10],
-                'stepSize': [0.001, 0.01],
-                'maxIter': [25],
-                'tol': [1e-6, 1e-4]
+                'num_hidden_layers': range(1,5),
+                'first_hidden_layer_size': range(2,21,4),
+                'blockSize': range(2,11,2),
+                'stepSize': [0.001, 0.01, 0.1],
+                'maxIter': [25, 50],
+                'tol': [1e-6, 1e-4, 1e-2]
             }):
         """Grid search for MLP with randomized hidden layer complexity
         
@@ -709,37 +631,99 @@ class SparkMLBinaryClassifier:
         Returns:
             [type] -- [description]
         """
-        # if not SparkMethods.is_databricks_autotracking_enabled():
+
+        def create_MCMC_MLP_paramMap(df, model, featuresCol='features', labelCol='label', max_hl_nodes=100, paramMap_size=50):
+            """
+            Monte Carlo Markov Chain method for testing a sample of hyperparameters.
+            Each hidden layer will be equal to or smaller than the prior hidden layer and chosen from the HL options.
+            
+            Arguments:
+                df {[type]} -- must have a features and label(s) column to count the number of inputs and outputs
+            
+            Keyword Arguments:
+                featuresCol {str} -- column with features for the NN (default: {'features'})
+                labelCol {str} -- column with labels for the NN (default: {'label'})
+                max_hl_nodes {int} -- Maximum number of nodes in all hidden layers (default: {100})
+                paramMap_size {int} -- number of hyperparameter combinations to return as a paramMap (default: {50})
+            
+            Returns:
+                [spark MLlib paramMap] -- Same structure as paramGridBuilder().addGrid(...).build()
+            """
+
+            Ni = df.select(featuresCol).head()[featuresCol].size # number of input neurons
+            No = df.select(labelCol).distinct().count() # number of output neurons
+            #Ns = train_df.count() # number of samples in training data
+            
+            #Nh = round(Ns / (alpha*(Ni+No))) # max number of nodes based on heuristics, does not work on large datasets, should never be reached but just in case
+
+            def get_random_MLP_options(input_size, output_size, sample_size, max_nodes, MLP_param_options):
+                """Monte Carlo Markov Chain method for testing a sample of hyperparameters.
+                Each hidden layer will be equal to or smaller than the prior hidden layer and chosen from the HL options.
+                
+                Arguments:
+                    input_size {[type]} -- [description]
+                    output_size {[type]} -- [description]
+                    sample_size {[type]} -- [description]
+                    max_nodes {[type]} -- [description]
+                    MLP_param_options {[type]} -- [description]
+                
+                Returns:
+                    [type] -- [description]
+                """
+                MCMC_grid = []
+
+                while len(MCMC_grid) < sample_size:
+                    MLP_params = {}
+
+                    # choose random options for all parameters
+                    for key in MLP_param_options.keys():
+                        MLP_params[key] = random.choice(MLP_param_options[key])
+
+                    # set size of first hidden layer
+                    MLP_params['hidden_layers'] = [MLP_params['first_hidden_layer_size']]
+                    del MLP_params['first_hidden_layer_size']
+
+                    #select equal or smaller hidden layer size based on previous hidden layer
+                    for l in range(2,MLP_params['num_hidden_layers']+1):
+                        options_left = [x for x in MLP_param_options['first_hidden_layer_size'] if x <= min(MLP_params['hidden_layers'])]
+                        MLP_params['hidden_layers'].append(random.choice(options_left))
+
+                    if (sum(MLP_params['hidden_layers'])< max_nodes):
+                        MLP_params['layers'] = [input_size] + MLP_params['hidden_layers'] + [output_size]
+                        del MLP_params['hidden_layers']
+                        del MLP_params['num_hidden_layers']
+                        MCMC_grid.append(MLP_params)
+
+                return MCMC_grid
+
+            NN_options = get_random_MLP_options(Ni, No, paramMap_size, max_hl_nodes, grid_params)
+            # print(NN_options)
+            paramGrid = SparkMethods.build_param_grid(model, NN_options)
+            print(paramGrid)
+            return paramGrid
 
         # MLFlow logs
         import mlflow
         today = date.today()
         experimentPath = today.strftime("%Y%m%d")
         try:
-            print('created new MLFlow Experiment LSVC') 
+            print('created new MLFlow Experiment MLP') 
             experimentID = mlflow.create_experiment(experimentPath)
         except MlflowException:
-            print('Using existing MLFlow Experiment LSVC') 
+            print('Using existing MLFlow Experiment MLP') 
             experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
         
         # start nested mlflow experiement
-        with mlflow.start_run(experiment_id=experimentID,run_name='LSVC-training', nested=True):
+        with mlflow.start_run(experiment_id=experimentID,run_name='MLP-training', nested=True):
             # Train a GBT model.
-            LSVC = LinearSVC(featuresCol=features_col,
+            MLP = MultilayerPerceptronClassifier(featuresCol=features_col,
                                 labelCol=label_col,
                                 predictionCol='predicted_' + label_col)
             
-            
-            pipeline = Pipeline().setStages([LSVC])
+            pipeline = Pipeline().setStages([MLP])
 
             # train:
-            paramGrid = ParamGridBuilder() \
-                .addGrid(LSVC.standardization, grid_params['standardization'])\
-                .addGrid(LSVC.aggregationDepth, grid_params['aggregationDepth'])\
-                .addGrid(LSVC.regParam, grid_params['regParam'])\
-                .addGrid(LSVC.maxIter, grid_params['maxIter'])\
-                .addGrid(LSVC.tol, grid_params['tol'])\
-                .build()
+            paramGrid = create_MCMC_MLP_paramMap(train_df, MLP, featuresCol=features_col, labelCol=label_col)
 
             # cross validate using 80% of the CPUs
             crossval = CrossValidator(
