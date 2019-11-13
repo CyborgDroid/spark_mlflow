@@ -11,14 +11,21 @@ Stratified TrainTestSplit in Spark (missing out of the box) (_finished_)
 
 Demonstration of how to use MLFlow to:
 1. Log nested runs with Spark MLlib vectorizers and CrossValidation / GridSearch outside of Databricks (_finished_)
-2. Classifier multi-algorithm grid search:
-    - GradientBoostedTrees (_finished_)
-    - LinearSVC (_finished_)
-    - Multi-layer Perceptron (MLP) (_TBD_)
-    - LogisticRegression (_TBD_)
-3. Log nested runs with Genetic Algorithm for Hyperparameter Optimization instead of GridSearch (_TBD_)
-4. Predict with a saved model via a script. (_finished_)
-5. Create a microservice API of the model:
+2. Grid search for pyspark.ml.classification classifiers: (_finished_)
+    - GradientBoostedTrees 
+    - LinearSVC
+    - RandomForestClassifier
+    - Multi-layer Perceptron (MLP) (Spark MLlib does not expose training parameters in trained model, params not logged in MLFlow)
+    - LogisticRegression
+3. Random search for pyspark.ml.classification classifiers: (_finished_)
+    - GradientBoostedTrees 
+    - LinearSVC
+    - RandomForestClassifier
+    - Multi-layer Perceptron (MLP) (Spark MLlib does not expose training parameters in trained model, params not logged in MLFlow)
+    - LogisticRegression
+4. Log nested runs with Genetic Algorithm for Hyperparameter Optimization instead of GridSearch (_TBD_)
+5. Predict with a saved model via a script. (_finished_)
+6. Create a microservice API of the model:
     - via terminal (_TBD_)
     - dockerized service [./source/test_API.py](./source/test_API.py) (_finished but need to combine with vectorizer to avoid having two services. Separated to enhance performace, see below_)
 

@@ -11,7 +11,7 @@ import mlflow
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 from datetime import date
-from source.functions import SparkMethods, DataLoader, SparkMLBinaryClassifierGridSearch
+from source.functions import SparkMethods, DataLoader, SparkMLBinaryClassifierRandomSearch
 
 #%%
 spark = SparkMethods.get_spark_session()
@@ -47,43 +47,6 @@ trainingData, testData = SparkMethods.train_test_split(
     show_summary=True)
 
 #%%
-models = SparkMLBinaryClassifierGridSearch(trainingData, testData, kfolds=3, 
-    GBT_params = {
-        'maxDepth': [5],
-        'maxBins': [48],
-        'maxIter': [25],
-        'stepSize': [0.1, 0.15]
-    },
-    LSVC_params = {
-        'standardization': [True],
-        'aggregationDepth': [5, 10],
-        'regParam': [0.001, 0.01],
-        'maxIter': [25],
-        'tol': [1e-6, 1e-4]
-    },
-    MLP_params = {
-        'layers': [[123, 10, 4, 2]],
-        'blockSize': [5, 10],
-        'stepSize': [0.001, 0.01],
-        'maxIter': [25],
-        'tol': [1e-6, 1e-4]
-    },
-    LR_params = {
-        'standardization': [True],
-        'aggregationDepth': [5, 10],
-        'regParam': [0.001, 0.01],
-        'maxIter': [25],
-        'threshold':[0.5],
-        'elasticNetParam': [0.0, 0.5, 1],
-        'tol': [1e-6, 1e-4]
-    },
-    RandomForest_params = {
-        'maxDepth': [5],
-        'maxBins': [48],
-        'minInfoGain': [0.0, 0.05],
-        'impurity': ['gini', 'entropy']
-    }
-
-    )
+models = SparkMLBinaryClassifierRandomSearch(trainingData, testData, kfolds=3)
 
 #%%
