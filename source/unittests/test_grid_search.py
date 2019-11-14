@@ -47,6 +47,7 @@ trainingData, testData = SparkMethods.train_test_split(
     show_summary=True)
 
 #%%
+# run: 2 GBT, 8 LSVC, 8 MLPs, 8 LRs, and 4 RandomForests
 models = SparkMLBinaryClassifierGridSearch(trainingData, testData, kfolds=3, 
     GBT_params = {
         'maxDepth': [5],
@@ -74,7 +75,7 @@ models = SparkMLBinaryClassifierGridSearch(trainingData, testData, kfolds=3,
         'regParam': [0.001, 0.01],
         'maxIter': [25],
         'threshold':[0.5],
-        'elasticNetParam': [0.0, 0.5, 1],
+        'elasticNetParam': [0.0],
         'tol': [1e-6, 1e-4]
     },
     RandomForest_params = {
