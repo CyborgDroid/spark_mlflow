@@ -8,7 +8,7 @@ from configparser import RawConfigParser
 from pathlib import Path
 import pandas_profiling
 from pyspark.ml import Pipeline
-from pyspark.ml.classification import GBTClassifier, LinearSVC, MultilayerPerceptronClassifier, LogisticRegression, RandomForestClassifier
+from pyspark.ml import classification as C
 from pyspark.ml.feature import ChiSqSelector, StringIndexer, OneHotEncoderEstimator, VectorAssembler, MinMaxScaler, IndexToString, SQLTransformer
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
@@ -21,6 +21,7 @@ from mlflow.tracking import MlflowClient
 from datetime import date
 from pathlib import Path
 import random
+
 
 class GeneralMethods:
     @staticmethod
@@ -38,12 +39,14 @@ class SparkMethods:
         Returns:
             pyspark.sql.session.SparkSession
         """
-        return SparkSession.builder\
+        spark = SparkSession.builder\
             .appName(appName)\
             .master(master)\
             .config("spark.sql.execution.arrow.enabled", "true")\
             .config("spark.sql.execution.arrow.fallback.enabled", "true")\
             .getOrCreate()
+        spark.sparkContext.setLogLevel("ERROR")
+        return spark
 
     @staticmethod
     def create_pandas_profile(spark_df, report_title):
@@ -445,8 +448,11 @@ class SparkMethods:
             [type] -- [description]
         """
         
+        model_name = str(model).split('_')[0]
+        print('Training '+ str(len(paramGrid))+' ' + model_name + ' models')
+
         if model==None:
-            model = LinearSVC()
+            model = C.LinearSVC()
 
         pipeline = Pipeline().setStages([model])
 
@@ -465,7 +471,7 @@ class SparkMethods:
         # Run cross-validation, and choose the best set of parameters.
         cv_model = crossval.fit(train_df)
 
-        # Log Parameters, Metrics, and all models with MLFlow
+        # get best model and submodels
 
         bestModel = cv_model.bestModel
         subModels = cv_model.subModels
@@ -474,13 +480,13 @@ class SparkMethods:
         import mlflow
         today = date.today()
         experimentPath = today.strftime("%Y%m%d")
-        model_name = str(model).split('_')[0]
+
         try:
             experimentID = mlflow.create_experiment(experimentPath)
-            print('created new MLFlow Experiment for ' + model_name) 
+            print('created new MLFlow Experiment') 
         except MlflowException:
             experimentID = MlflowClient().get_experiment_by_name(experimentPath).experiment_id
-            print('Using existing MLFlow Experiment for ' + model_name) 
+            print('Using existing MLFlow Experiment') 
 
         # start nested mlflow experiement
         with mlflow.start_run(experiment_id=experimentID,run_name=model_name, nested=True):
@@ -492,6 +498,7 @@ class SparkMethods:
                     train_metrics = SparkMethods.get_MultiClassMetrics(train_df, model, data_type='train', labelCol=labelCol)
                     test_metrics = SparkMethods.get_MultiClassMetrics(test_df, model, data_type='test', labelCol=labelCol)
                     with mlflow.start_run(experiment_id=experimentID,run_name=model_name, nested=True):
+                        mlflow.log_param('model_type', model_name)
                         mlflow.log_param('Model', x + 1)
                         mlflow.log_param('current_Kfold', i + 1)
                         mlflow.log_param('numKfolds', kfolds)
@@ -500,21 +507,23 @@ class SparkMethods:
                             mlflow.log_params(stage_params)
                         mlflow.log_metrics(train_metrics)
                         mlflow.log_metrics(test_metrics)
+                        mlflow.set_tag('model', model_name)
 
-        # log best model, params, and metrics with MLFlow
-        params_stages_bestModel = SparkMethods.get_model_params(bestModel)
-        train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', labelCol=labelCol)
-        test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', labelCol=labelCol)
-        for params_stages in params_stages_bestModel:
-            mlflow.log_params(params_stages)
-        mlflow.set_tag('model', 'best_' + model_name)
-        mlflow.log_metrics(train_metrics_bestModel)
-        mlflow.log_metrics(test_metrics_bestModel)
-        import mlflow.spark
-        mlflow.spark.log_model(bestModel, 'best_' + model_name)
-        train_df = cv_model.bestModel.transform(train_df)
-        test_df = cv_model.bestModel.transform(test_df)
-        mlflow.end_run()
+            # log best model, params, and metrics with MLFlow
+            params_stages_bestModel = SparkMethods.get_model_params(bestModel)
+            train_metrics_bestModel = SparkMethods.get_MultiClassMetrics(train_df, bestModel, data_type='train', labelCol=labelCol)
+            test_metrics_bestModel = SparkMethods.get_MultiClassMetrics(test_df, bestModel, data_type='test', labelCol=labelCol)
+            mlflow.log_param('model_type', model_name)
+            for params_stages in params_stages_bestModel:
+                mlflow.log_params(params_stages)
+            mlflow.set_tag('model', model_name)
+            mlflow.log_metrics(train_metrics_bestModel)
+            mlflow.log_metrics(test_metrics_bestModel)
+            import mlflow.spark
+            mlflow.spark.log_model(bestModel, 'best_' + model_name)
+            train_df = cv_model.bestModel.transform(train_df)
+            test_df = cv_model.bestModel.transform(test_df)
+            mlflow.end_run()
 
         return cv_model
 
@@ -604,9 +613,9 @@ class SparkMethods:
 
         # if no model is defined, default to LinearSVC, use custom random search for MLP
         if model==None:
-            model = LinearSVC()
-        elif type(model)==type(MultilayerPerceptronClassifier()):
-            return SparkMethods.classifier_random_search_MLP(train_df, test_df, 'MulticlassClassificationEvaluator', labelCol=labelCol, featuresCol=featuresCol, model_file_name='best_MLP', kfolds=kfolds, grid_params=grid_params)
+            model = C.LinearSVC()
+        elif type(model)==type(C.MultilayerPerceptronClassifier()):
+            return SparkMethods.classifier_random_search_MLP(train_df, test_df, random_grid_size=random_grid_size, evaluator='MulticlassClassificationEvaluator', labelCol=labelCol, featuresCol=featuresCol, model_file_name='best_MLP', kfolds=kfolds, grid_params=grid_params)
 
         param_lod = []
 
@@ -632,6 +641,7 @@ class SparkMethods:
     @staticmethod
     def classifier_random_search_MLP(
             train_df, test_df,
+            random_grid_size=50,
             evaluator='MulticlassClassificationEvaluator',
             labelCol='label',
             featuresCol='features',
@@ -652,6 +662,7 @@ class SparkMethods:
             test_df {[type]} -- [description]
         
         Keyword Arguments:
+            random_grid_size {int} -- Number of hyperparameter combinations to try
             evaluator {str} -- [To be added to enable BinaryClassificationEvaluator and metrics] (default: {'MulticlassClassificationEvaluator'})
             labelCol {str} -- [The target label column] (default: {'label'})
             featuresCol {str} -- [column with sparse matrix features] (default: {'features'})
@@ -727,16 +738,14 @@ class SparkMethods:
                 return MCMC_grid
 
             NN_options = get_random_MLP_options(Ni, No, paramMap_size, max_hl_nodes, grid_params)
-            # print(NN_options)
             paramGrid = SparkMethods.build_param_grid(model, NN_options)
-            print(paramGrid)
             return paramGrid
 
-        model = MultilayerPerceptronClassifier(featuresCol=featuresCol,
+        model = C.MultilayerPerceptronClassifier(featuresCol=featuresCol,
                                 labelCol=labelCol,
                                 predictionCol='predicted_' + labelCol)
 
-        paramGrid = create_MCMC_MLP_paramMap(train_df, model, featuresCol=featuresCol, labelCol=labelCol)
+        paramGrid = create_MCMC_MLP_paramMap(train_df, model, featuresCol=featuresCol, labelCol=labelCol, paramMap_size=random_grid_size)
 
         return SparkMethods.classifier_search(train_df, test_df, paramGrid, model, labelCol=labelCol, featuresCol=featuresCol,kfolds=kfolds)
 
@@ -752,42 +761,43 @@ class SparkMLBinaryClassifierGridSearch:
             labelCol='label',
             featuresCol='features',
             kfolds=5,
-            GBT_params={
-                'maxDepth': [3, 5, 7],
-                'maxBins': [8, 16, 32],
-                'maxIter': [25, 50, 100],
-                'stepSize': [0.15, 0.2, 0.25],
-            
-            },
-            LSVC_params={
-                'standardization': [True, False],
-                'aggregationDepth': [2, 5, 7],
-                'regParam': [0.1, 1, 10],
-                'maxIter': [25, 50, 100],
-                'tol': [1e-6, 1e-4, 1e-2]
-            },
-            MLP_params = {
-                'num_hidden_layers': range(1,5),
-                'first_hidden_layer_size': range(2,21,4), 
-                'blockSize': [2, 5, 10],
-                'stepSize': [0.001, 0.01, 0.1],
-                'maxIter': [25, 50],
-                'tol': [1e-6, 1e-4, 1e-2]
-            },
-            LR_params = {
-                'standardization': [True],
-                'aggregationDepth': [5, 10],
-                'regParam': [0.001, 0.01],
-                'maxIter': [25],
-                'threshold':[0.5],
-                'elasticNetParam': [0.0, 0.5, 1],
-                'tol': [1e-6, 1e-4]
-            },
-            RandomForest_params = {
-                'maxDepth': [5],
-                'maxBins': [48],
-                'minInfoGain': [0.0, 0.05],
-                'impurity': ['gini', 'entropy']
+            grid_params={
+                'GBTClassifier':{
+                    'maxDepth': [3, 5, 7],
+                    'maxBins': [8, 16, 32],
+                    'maxIter': [25, 50, 100],
+                    'stepSize': [0.15, 0.2, 0.25],
+                },
+                'LinearSVC':{
+                    'standardization': [True, False],
+                    'aggregationDepth': [2, 5, 7],
+                    'regParam': [0.1, 1, 10],
+                    'maxIter': [25, 50, 100],
+                    'tol': [1e-6, 1e-4, 1e-2]
+                },
+                'MultilayerPerceptronClassifier' : {
+                    'num_hidden_layers': range(1,5),
+                    'first_hidden_layer_size': range(2,21,4), 
+                    'blockSize': [2, 5, 10],
+                    'stepSize': [0.001, 0.01, 0.1],
+                    'maxIter': [25, 50],
+                    'tol': [1e-6, 1e-4, 1e-2]
+                },
+                'LogisticRegression' : {
+                    'standardization': [True],
+                    'aggregationDepth': [5, 10],
+                    'regParam': [0.001, 0.01],
+                    'maxIter': [25],
+                    'threshold':[0.5],
+                    'elasticNetParam': [0.0, 0.5, 1.0],
+                    'tol': [1e-6, 1e-4]
+                },
+                'RandomForestClassifier' : {
+                    'maxDepth': [3, 5, 7],
+                    'maxBins': [16, 32],
+                    'minInfoGain': [0.0, 0.05],
+                    'impurity': ['gini', 'entropy']
+                }
             }):
         general_params = {
            'train_df': train_df, 
@@ -798,12 +808,8 @@ class SparkMLBinaryClassifierGridSearch:
             'kfolds':kfolds 
         }
         self.models = {}
-        self.models['GBT'] = SparkMethods.classifier_grid_search(**general_params, model=GBTClassifier(),grid_params=GBT_params)
-        self.models['LSVC'] = SparkMethods.classifier_grid_search(**general_params, model=LinearSVC(), grid_params=LSVC_params)
-        self.models['MLP'] = SparkMethods.classifier_grid_search(**general_params, model=MultilayerPerceptronClassifier(), grid_params=MLP_params)
-        self.models['LR'] = SparkMethods.classifier_grid_search(**general_params, model=LogisticRegression(), grid_params=LR_params)
-        self.models['RF'] = SparkMethods.classifier_grid_search(**general_params, model=RandomForestClassifier(), grid_params=RandomForest_params)
-
+        for model_name, param in grid_params.items(): 
+            self.models[model_name] = SparkMethods.classifier_grid_search(**general_params, model=getattr(C, model_name),grid_params=param)
 
 class SparkMLBinaryClassifierRandomSearch:
     """[summary]
@@ -813,63 +819,62 @@ class SparkMLBinaryClassifierRandomSearch:
     """
     def __init__(self,
             train_df, test_df,
-            sample_size=50,
+            random_grid_size=50,
             evaluator='MulticlassClassificationEvaluator',
             labelCol='label',
             featuresCol='features',
             kfolds=5,
-            GBT_params={
-                'maxDepth': [3, 5, 7, 9],
-                'maxBins': [8, 16, 32, 48, 64],
-                'maxIter': [25, 50, 75],
-                'stepSize': [0.01, 0.05, 0.1, 0.15, 0.2, 0.25],
-            
-            },
-            LSVC_params={
-                'standardization': [True, False],
-                'aggregationDepth': [2, 5, 7, 10],
-                'regParam': [0.001, 0.01, 0.1, 1, 10],
-                'maxIter': [25, 50, 75],
-                'tol': [1e-6, 1e-4, 1e-2]
-            },
-            MLP_params = {
-                'num_hidden_layers': range(1,5),
-                'first_hidden_layer_size': range(2,21,4), 
-                'blockSize': [2, 5, 10],
-                'stepSize': [0.001, 0.01, 0.1],
-                'maxIter': [25, 50, 75],
-                'tol': [1e-6, 1e-4, 1e-2]
-            },
-            LR_params = {
-                'standardization': [True, False],
-                'aggregationDepth': [2, 5, 7, 10],
-                'regParam': [0.001, 0.01, 0.1, 1, 10],
-                'maxIter': [25, 50, 75],
-                'threshold':[0.4, 0.5, 0.6],
-                'elasticNetParam': [0.0, 0.25, 0.5, 0.75, 1],
-                'tol': [1e-6, 1e-4, 1e-2]
-            },
-            RandomForest_params = {
-                'maxDepth': [3, 5, 7, 9],
-                'maxBins': [8, 16, 32, 48, 64],
-                'minInfoGain': [0.0, 0.05, 0.1],
-                'impurity': ['gini', 'entropy']
+            grid_params= {
+                'GBTClassifier':{
+                    'maxDepth': [3, 5, 7, 9],
+                    'maxBins': [8, 16, 32, 48, 64],
+                    'maxIter': [25, 50, 75],
+                    'stepSize': [0.01, 0.05, 0.1, 0.15, 0.2, 0.25]
+                },
+                'LinearSVC' : {
+                    'standardization': [True, False],
+                    'aggregationDepth': [2, 5, 7, 10],
+                    'regParam': [0.001, 0.01, 0.1, 1.0, 10.0],
+                    'maxIter': [25, 50, 75],
+                    'tol': [1e-6, 1e-4, 1e-2]
+                },
+                'MultilayerPerceptronClassifier' : {
+                    'num_hidden_layers': range(1,5),
+                    'first_hidden_layer_size': range(2,21,4), 
+                    'blockSize': [2, 5, 10],
+                    'stepSize': [0.001, 0.01, 0.1],
+                    'maxIter': [25, 50, 75],
+                    'tol': [1e-6, 1e-4, 1e-2]
+                },
+                'LogisticRegression' : {
+                    'standardization': [True, False],
+                    'aggregationDepth': [2, 5, 7, 10],
+                    'regParam': [0.001, 0.01, 0.1, 1.0, 10.0],
+                    'maxIter': [25, 50, 75],
+                    'threshold':[0.4, 0.5, 0.6],
+                    'elasticNetParam': [0.0, 0.25, 0.5, 0.75, 1.0],
+                    'tol': [1e-6, 1e-4, 1e-2]
+                },
+                'RandomForestClassifier' : {
+                    'maxDepth': [3, 5, 7, 9],
+                    'maxBins': [8, 16, 32, 48, 64],
+                    'minInfoGain': [0.0, 0.05, 0.1],
+                    'impurity': ['gini', 'entropy']
+                }
             }):
         general_params = {
            'train_df': train_df, 
            'test_df': test_df,
-           'sample_grid_size': sample_size,
+           'random_grid_size': random_grid_size,
             'evaluator':evaluator,
             'labelCol':labelCol,
             'featuresCol':featuresCol,
             'kfolds':kfolds 
         }
+
         self.models = {}
-        self.models['GBT'] = SparkMethods.classifier_random_search(**general_params, model=GBTClassifier(), grid_params=GBT_params)
-        self.models['LSVC'] = SparkMethods.classifier_random_search(**general_params, model=LinearSVC(), grid_params=LSVC_params)
-        self.models['MLP'] = SparkMethods.classifier_random_search(**general_params, model=MultilayerPerceptronClassifier(), grid_params=MLP_params)
-        self.models['LR'] = SparkMethods.classifier_random_search(**general_params, model=LogisticRegression(), grid_params=LR_params)
-        self.models['RF'] = SparkMethods.classifier_random_search(**general_params, model=RandomForestClassifier(), grid_params=RandomForest_params)
+        for model_name, param in grid_params.items(): 
+            self.models[model_name] = SparkMethods.classifier_grid_search(**general_params, model=getattr(C, model_name),grid_params=param)
 
 
 class DataLoader:

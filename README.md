@@ -2,36 +2,36 @@
 
 The purpose of this project is to create a complete example of how MLFlow can be used in an end to end Model Management setting. Databricks comes with MLFlow auto-tracking, which is partially replicated here for use outside of Databricks.
 
-Basic EDA using custom spark describe + pandas_profiling: (_finished_)
+Basic EDA using custom spark describe + pandas_profiling:
 
 1. Custom spark describe + EDA: [./source/data_exploration.py](./source/data_exploration.py)
 2. Pandas-profiling report: [./reports/overview.html](./reports/overview.html)
 
-Stratified TrainTestSplit in Spark (missing out of the box) (_finished_)
+Stratified TrainTestSplit in Spark (missing out of the box)
 
 Demonstration of how to use MLFlow to:
-1. Log nested runs with Spark MLlib vectorizers and CrossValidation / GridSearch outside of Databricks (_finished_)
-2. Grid search for pyspark.ml.classification classifiers: (_finished_)
+1. Log nested runs with Spark MLlib vectorizers and CrossValidation / GridSearch outside of Databricks
+2. Grid search for pyspark.ml.classification classifiers: Works with all Spark MLlib classifiers, however, only the below have been tested.
     - GradientBoostedTrees 
     - LinearSVC
     - RandomForestClassifier
     - Multi-layer Perceptron (MLP) (Spark MLlib does not expose training parameters in trained model, params not logged in MLFlow)
     - LogisticRegression
-3. Random search for pyspark.ml.classification classifiers: (_finished_)
+3. Random search for pyspark.ml.classification classifiers: Works with all Spark MLlib classifiers, however, only the below have been tested.
     - GradientBoostedTrees 
     - LinearSVC
     - RandomForestClassifier
     - Multi-layer Perceptron (MLP) (Spark MLlib does not expose training parameters in trained model, params not logged in MLFlow)
     - LogisticRegression
 4. Log nested runs with Genetic Algorithm for Hyperparameter Optimization instead of GridSearch (_TBD_)
-5. Predict with a saved model via a script. (_finished_)
+5. Predict with a saved model via a script. [./source/test_API.py](./source/test_API.py) 
 6. Create a microservice API of the model:
     - via terminal (_TBD_)
-    - dockerized service [./source/test_API.py](./source/test_API.py) (_finished but need to combine with vectorizer to avoid having two services. Separated to enhance performace, see below_)
+    - dockerized service [./source/predict.py](./source/predict.py) (_TBD_)
 
 Other features:
 1. Performance optimizations:
-    - Paralellized cross validation to use 80% of CPUs (CPUs = threaded logical cores or 2x physical cores) (_finished_) 
+    - Paralellized cross validation to use 80% of CPUs (CPUs = threaded logical cores or 2x physical cores)
     - Vectorize once rather than during each cross-validation (_finished_) re-integrating the vectorizer pipeline with model pipeline until after training is complete (_TBD_)
 
 ### Configure conda/miniconda ###
@@ -127,21 +127,21 @@ trainingData, testData = SparkMethods.train_test_split(
 |   >50K,Male|       4663|      1999|   0.3|
 
 
-## MLFlow with a GradientBoostedTrees Classifier Grid Seacrh (CrossValidator) ##
-
-_Will be updated to include example with LinearSVC and MLP_
+## MLFlow Grid Search with a single classifier: GradientBoostedTrees ##
 
 This grid search has 54 combinations tested on 5 folds. If you have a regular laptop, try using fewer hyperparameter options before visualizing which settings work best using the MLFlow UI to tweak and repeat.
 
 ```python
 grid_params = {
-    'maxDepth': [1,5,7],
-    'maxBins': [8,16,32],
-    'maxIter': [25,50],
-    'stepSize': [0.15,0.2,0.3]
+    'GBTClassifier':{
+        'maxDepth': [1,5,7],
+        'maxBins': [8,16,32],
+        'maxIter': [25,50],
+        'stepSize': [0.15,0.2,0.3]
+    }
 }
 
-cv_model, train_df, test_df = SparkMethods.grid_search_GBT(
+results = SparkMLBinaryClassifierGridSearch(
     trainingData,
     testData,
     evaluator='MulticlassClassificationEvaluator',
@@ -181,13 +181,15 @@ Filtering to see testF1Scores > 0.86 and consistent with the above, we can concl
 
 ```python
 grid_params = {
-    'maxDepth': [4,5,6],
-    'maxBins': [32,40,48],
-    'maxIter': [25],
-    'stepSize': [0.15]
+        'GBTClassifier':{
+        'maxDepth': [4,5,6],
+        'maxBins': [32,40,48],
+        'maxIter': [25],
+        'stepSize': [0.15]
+    }
 }
 
-cv_model, train_df, test_df = SparkMethods.grid_search_GBT(
+results = SparkMLBinaryClassifierGridSearch(
     trainingData,
     testData,
     evaluator='MulticlassClassificationEvaluator',
@@ -208,3 +210,122 @@ __maxBins:__ Continues to improve slightly with more bins but is not getting pas
 __maxDepth:__ Depth of 5 is optimal.
 
 ![alt text](docs/images/maxDepth2.png)
+
+## MLFlow Grid Search with multiple classifiers ##
+
+Works with all Spark MLlib classifiers, however, only the below have been tested.
+
+```python
+models = SparkMLBinaryClassifierGridSearch(
+    trainingData,
+    testData)
+```
+
+Default parameters (same as above):
+```python
+models = SparkMLBinaryClassifierGridSearch(trainingData, testData,
+            evaluator='MulticlassClassificationEvaluator',
+            labelCol='label',
+            featuresCol='features',
+            kfolds=5,
+            grid_params={
+                'GBTClassifier':{
+                    'maxDepth': [3, 5, 7],
+                    'maxBins': [8, 16, 32],
+                    'maxIter': [25, 50, 100],
+                    'stepSize': [0.15, 0.2, 0.25],
+                },
+                'LinearSVC':{
+                    'standardization': [True, False],
+                    'aggregationDepth': [2, 5, 7],
+                    'regParam': [0.1, 1, 10],
+                    'maxIter': [25, 50, 100],
+                    'tol': [1e-6, 1e-4, 1e-2]
+                },
+                'MultilayerPerceptronClassifier' : {
+                    'num_hidden_layers': range(1,5),
+                    'first_hidden_layer_size': range(2,21,4), 
+                    'blockSize': [2, 5, 10],
+                    'stepSize': [0.001, 0.01, 0.1],
+                    'maxIter': [25, 50],
+                    'tol': [1e-6, 1e-4, 1e-2]
+                },
+                'LogisticRegression' : {
+                    'standardization': [True],
+                    'aggregationDepth': [5, 10],
+                    'regParam': [0.001, 0.01],
+                    'maxIter': [25],
+                    'threshold':[0.5],
+                    'elasticNetParam': [0.0, 0.5, 1.0],
+                    'tol': [1e-6, 1e-4]
+                },
+                'RandomForestClassifier' : {
+                    'maxDepth': [3, 5, 7],
+                    'maxBins': [16, 32],
+                    'minInfoGain': [0.0, 0.05],
+                    'impurity': ['gini', 'entropy']
+                }
+            })
+```
+![alt text](docs/images/MultiAlgorithmGridSearchF1Score.png)
+
+## MLFlow Random Search with multiple classifiers ##
+
+Works with all Spark MLlib classifiers, however, only the below have been tested.
+
+```python
+models = SparkMLBinaryClassifierRandomSearch(
+    trainingData,
+    testData)
+```
+
+Default parameters (same as above):
+```python
+models = SparkMLBinaryClassifierRandomSearch(
+    trainingData,
+    testData,
+    random_grid_size=50,
+    evaluator='MulticlassClassificationEvaluator',
+    labelCol='label',
+    featuresCol='features',
+    kfolds=5,
+    grid_params={
+        'GBTClassifier': {
+            'maxDepth': [3, 5, 7, 9],
+            'maxBins': [8, 16, 32, 48, 64],
+            'maxIter': [25, 50, 75],
+            'stepSize': [0.01, 0.05, 0.1, 0.15, 0.2, 0.25]
+        },
+        'LinearSVC': {
+            'standardization': [True, False],
+            'aggregationDepth': [2, 5, 7, 10],
+            'regParam': [0.001, 0.01, 0.1, 1.0, 10.0],
+            'maxIter': [25, 50, 75],
+            'tol': [1e-06, 0.0001, 0.01]
+        },
+        'MultilayerPerceptronClassifier': {
+            'num_hidden_layers': range(1, 5),
+            'first_hidden_layer_size': range(2, 21, 4),
+            'blockSize': [2, 5, 10],
+            'stepSize': [0.001, 0.01, 0.1],
+            'maxIter': [25, 50, 75],
+            'tol': [1e-06, 0.0001, 0.01]
+        },
+        'LogisticRegression': {
+            'standardization': [True, False],
+            'aggregationDepth': [2, 5, 7, 10],
+            'regParam': [0.001, 0.01, 0.1, 1.0, 10.0],
+            'maxIter': [25, 50, 75],
+            'threshold': [0.4, 0.5, 0.6],
+            'elasticNetParam': [0.0, 0.25, 0.5, 0.75, 1.0],
+            'tol': [1e-06, 0.0001, 0.01]
+        },
+        'RandomForestClassifier': {
+            'maxDepth': [3, 5, 7, 9],
+            'maxBins': [8, 16, 32, 48, 64],
+            'minInfoGain': [0.0, 0.05, 0.1],
+            'impurity': ['gini', 'entropy']
+        }
+    })
+```
+![alt text](docs/images/MultiAlgorithmRandomF1Score.png)
