@@ -575,9 +575,7 @@ class SparkMethods:
 
         paramGrid = paramGrid.build()
 
-        return SparkMethods.classifier_search(train_df, test_df, paramGrid, model, labelCol=labelCol, featuresCol=featuresCol,kfolds=kfolds)
-
-            
+        return SparkMethods.classifier_search(train_df, test_df, paramGrid=paramGrid, search_type='gridSearch', model=model, labelCol=labelCol, featuresCol=featuresCol,kfolds=kfolds)
 
     @staticmethod
     def classifier_random_search(
@@ -638,7 +636,7 @@ class SparkMethods:
         model.setLabelCol(labelCol)
         model.setPredictionCol('predicted_' + labelCol)     
             
-        return SparkMethods.classifier_search(train_df, test_df, paramGrid, model, labelCol=labelCol, featuresCol=featuresCol,kfolds=kfolds)
+        return SparkMethods.classifier_search(train_df, test_df, paramGrid=paramGrid, search_type='random', model=model, evaluator=evaluator, labelCol=labelCol, featuresCol=featuresCol,kfolds=kfolds)
 
 
     @staticmethod
@@ -750,7 +748,7 @@ class SparkMethods:
 
         paramGrid = create_MCMC_MLP_paramMap(train_df, model, featuresCol=featuresCol, labelCol=labelCol, paramMap_size=random_grid_size)
 
-        return SparkMethods.classifier_search(train_df, test_df, paramGrid, model, labelCol=labelCol, featuresCol=featuresCol,kfolds=kfolds)
+        return SparkMethods.classifier_search(train_df, test_df, paramGrid=paramGrid,search_type='random', model=model, evaluator=evaluator, labelCol=labelCol, featuresCol=featuresCol,kfolds=kfolds)
 
 class SparkMLBinaryClassifierGridSearch:
     """[summary]
