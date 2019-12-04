@@ -245,12 +245,12 @@ class SparkMethods:
         import mlflow
         print(experimentPath)
         try:
-            print('created new MLFlow Experiment')
             experimentID = mlflow.create_experiment(experimentPath)
+            print('created new MLFlow Experiment')
         except MlflowException:
-            print('Using existing MLFlow Experiment')
             experimentID = MlflowClient().get_experiment_by_name(
                 experimentPath).experiment_id
+            print('Using existing MLFlow Experiment')
         mlflow.set_experiment(experimentPath)
 
         # with mlflow.start_run(experiment_id=experimentID,run_name='vectorizer', nested=True):
