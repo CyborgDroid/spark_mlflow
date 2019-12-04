@@ -23,21 +23,29 @@ Demonstration of how to use MLFlow to:
     - RandomForestClassifier
     - Multi-layer Perceptron (MLP) (Spark MLlib does not expose training parameters in trained model, params not logged in MLFlow)
     - LogisticRegression
-4. Log nested runs with Genetic Algorithm for Hyperparameter Optimization instead of GridSearch (_TBD_)
-5. Predict with a saved model via a script. [./source/test_API.py](./source/test_API.py) 
-6. Create a microservice API of the model:
+
+4. Predict with a saved model via a script. [./source/test_API.py](./source/test_API.py) 
+5. Create a microservice API of the model:
     - via terminal (_TBD_)
     - dockerized service [./source/predict.py](./source/predict.py) (_TBD_)
 
 Other features:
 1. Performance optimizations:
     - Paralellized cross validation to use 80% of CPUs (CPUs = threaded logical cores or 2x physical cores)
-    - Vectorize once rather than during each cross-validation (_finished_) re-integrating the vectorizer pipeline with model pipeline until after training is complete (_TBD_)
+    - Vectorize once rather than during each cross-validation
 
-Known issues (to be changed/fixed in release 2.0):
-1. Metrics and parameters are logged for all K-folds instead of all hyperparameter combinations multiplying the results (3 kfolds multiplies the results by 3). This will be changed to log only the results of each hyperparameter combination trained on the full training dataset. The best model will still be the one chosen by the crossValidator to reduce overfitting.
-2. Unit tests are just basic tests to see if the script runs, this will be changed to be true unit tests with logical assertions based on an expected output from a small dataset.
-3. The parameter "MulticlassClassificationEvaluator" is just a placeholder to avoid breaking changes when the "BinaryClassificationEvaluator" is added.
+Known issues:
+1. To be fixed/changed as a hotfix in 1.0:
+    - Vectorizer and model are logged as separate models since they are fitted separately for performance reasons. The vectorizer pipeline will be integrated into the model pipeline prior to logging the model with MLFlow.
+    - Github will not show pandas profile report in html, a pdf version will be added besides the html output for illustration purposes.
+2. To be fixed/changed in release 2.0:
+    - Metrics and parameters are logged for all K-folds instead of all hyperparameter combinations multiplying the results (3 kfolds multiplies the results by 3). This will be changed to log only the results of each hyperparameter combination trained on the full training dataset. The best model will still be the one chosen by the crossValidator to reduce overfitting.
+    - Unit tests are just basic tests to see if the script runs, this will be changed to be true unit tests with logical assertions based on an expected output from a small dataset.
+3. To be fixed/changed in a future release 3.0+:
+    - Convert project into a python package after critical changes in release 2.0 are made.
+    - Use Genetic Algorithm for Hyperparameter Optimization instead of a simple random search.
+    - The parameter "MulticlassClassificationEvaluator" is just a placeholder to avoid breaking changes when the "BinaryClassificationEvaluator" is added.
+    - Pandas profiling is the only function that is not distributed with spark, this will be changed when a suitable alternative is found or developed. The spark profiling package is not a suitable alternative. 
 
 ### Configure conda/miniconda ###
 
