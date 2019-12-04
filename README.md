@@ -34,6 +34,11 @@ Other features:
     - Paralellized cross validation to use 80% of CPUs (CPUs = threaded logical cores or 2x physical cores)
     - Vectorize once rather than during each cross-validation (_finished_) re-integrating the vectorizer pipeline with model pipeline until after training is complete (_TBD_)
 
+Known issues (to be changed/fixed in release 2.0):
+1. Metrics and parameters are logged for all K-folds instead of all hyperparameter combinations multiplying the results (3 kfolds multiplies the results by 3). This will be changed to log only the results of each hyperparameter combination trained on the full training dataset. The best model will still be the one chosen by the crossValidator to reduce overfitting.
+2. Unit tests are just basic tests to see if the script runs, this will be changed to be true unit tests with logical assertions based on an expected output from a small dataset.
+3. The parameter "MulticlassClassificationEvaluator" is just a placeholder to avoid breaking changes when the "BinaryClassificationEvaluator" is added.
+
 ### Configure conda/miniconda ###
 
 If you haven't already done so, add conda-forge as a channel
