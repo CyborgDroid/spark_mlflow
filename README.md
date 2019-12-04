@@ -46,6 +46,8 @@ Known issues:
     - Use Genetic Algorithm for Hyperparameter Optimization instead of a simple random search.
     - The parameter "MulticlassClassificationEvaluator" is just a placeholder to avoid breaking changes when the "BinaryClassificationEvaluator" is added.
     - Pandas profiling is the only function that is not distributed with spark, this will be changed when a suitable alternative is found or developed. The spark profiling package is not a suitable alternative. 
+4. Other:
+    - Spark MLlib does not expose training parameters in trained model, params not logged in MLFlow. An issue will be opened in spark mllib for this.
 
 ### Configure conda/miniconda ###
 
