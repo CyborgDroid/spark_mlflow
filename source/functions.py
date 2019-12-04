@@ -424,7 +424,7 @@ class SparkMethods:
         return paramMap
 
     @staticmethod
-    def classifier_search(train_df, test_df, paramGrid,
+    def classifier_search(train_df, test_df, paramGrid, search_type,
             model=None,
             evaluator='MulticlassClassificationEvaluator',
             labelCol='label',
@@ -435,7 +435,8 @@ class SparkMethods:
         Arguments:
             train_df {pyspark.sql.dataframe.DataFrame} -- training data
             test_df {pyspark.sql.dataframe.DataFrame} -- testing data
-            paramGrid {[type]} -- [description]
+            paramGrid {[type]} -- Parameter grid to test
+            search_type {string} -- 'random' or 'gridSearch', used to set a tag in MLFlow
         
         Keyword Arguments:
             model {Spark MLlib Classifier} -- classifier model to use (default: None=LinearSVC())
@@ -508,6 +509,7 @@ class SparkMethods:
                         mlflow.log_metrics(train_metrics)
                         mlflow.log_metrics(test_metrics)
                         mlflow.set_tag('model', model_name)
+                        mlflow.set_tag('search_type', search_type)
 
             # log best model, params, and metrics with MLFlow
             params_stages_bestModel = SparkMethods.get_model_params(bestModel)
@@ -517,6 +519,7 @@ class SparkMethods:
             for params_stages in params_stages_bestModel:
                 mlflow.log_params(params_stages)
             mlflow.set_tag('model', model_name)
+            mlflow.set_tag('search_type', search_type)
             mlflow.log_metrics(train_metrics_bestModel)
             mlflow.log_metrics(test_metrics_bestModel)
             import mlflow.spark
