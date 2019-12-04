@@ -1,16 +1,4 @@
 #%%
-from pyspark.ml import Pipeline
-from pyspark.ml.classification import GBTClassifier, LinearSVC, MultilayerPerceptronClassifier, LogisticRegression, RandomForestClassifier
-from pyspark.ml.feature import ChiSqSelector, StringIndexer, OneHotEncoderEstimator, VectorAssembler, MinMaxScaler, IndexToString, SQLTransformer
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-from pyspark.mllib.evaluation import MulticlassMetrics, BinaryClassificationMetrics
-from pyspark.ml import Pipeline
-import os
-import mlflow
-from mlflow.exceptions import MlflowException
-from mlflow.tracking import MlflowClient
-from datetime import date
 from source.functions import SparkMethods, DataLoader, SparkMLBinaryClassifierGridSearch
 
 #%%
