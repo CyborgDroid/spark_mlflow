@@ -618,7 +618,7 @@ class SparkMethods:
         # if no model is defined, default to LinearSVC, use custom random search for MLP
         if model==None:
             model = C.LinearSVC()
-        elif type(model)==type(C.MultilayerPerceptronClassifier()):
+        elif type(model())==type(C.MultilayerPerceptronClassifier()):
             return SparkMethods.classifier_random_search_MLP(train_df, test_df, random_grid_size=random_grid_size, evaluator=evaluator, labelCol=labelCol, featuresCol=featuresCol, model_file_name='best_MLP', kfolds=kfolds, grid_params=grid_params)
         else:
             model = model()
