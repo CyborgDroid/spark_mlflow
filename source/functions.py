@@ -539,11 +539,13 @@ class SparkMethods:
             featuresCol='features',
             kfolds=5,
             grid_params={
+                'LinearSVC':{
                 'standardization': [True],
                 'aggregationDepth': [5, 7],
                 'regParam': [0.1, 1, 10],
                 'maxIter': [25, 50],
                 'tol': [1e-6, 1e-4, 1e-2]
+                }
             }):
         """Grid search for pyspark.ml.classification models such as: LinearSVC(), GBTClassifier(), LogisticRegression(), DecisionTreeClassifier(), RandomForestClassifier(), and NaiveBayes(). MultilayerPerceptronClassifier is supported but will not log the parameters in MLFlow.
         
@@ -563,7 +565,8 @@ class SparkMethods:
             [type] -- [description]
         """
         
-        # Set model base params
+        # Instantiate model and set model base params
+        model = model()
         model.setFeaturesCol(featuresCol)
         model.setLabelCol(labelCol)
         model.setPredictionCol('predicted_' + labelCol)     
@@ -616,7 +619,9 @@ class SparkMethods:
         if model==None:
             model = C.LinearSVC()
         elif type(model)==type(C.MultilayerPerceptronClassifier()):
-            return SparkMethods.classifier_random_search_MLP(train_df, test_df, random_grid_size=random_grid_size, evaluator='MulticlassClassificationEvaluator', labelCol=labelCol, featuresCol=featuresCol, model_file_name='best_MLP', kfolds=kfolds, grid_params=grid_params)
+            return SparkMethods.classifier_random_search_MLP(train_df, test_df, random_grid_size=random_grid_size, evaluator=evaluator, labelCol=labelCol, featuresCol=featuresCol, model_file_name='best_MLP', kfolds=kfolds, grid_params=grid_params)
+        else:
+            model = model()
 
         param_lod = []
 
@@ -875,7 +880,7 @@ class SparkMLBinaryClassifierRandomSearch:
 
         self.models = {}
         for model_name, param in grid_params.items(): 
-            self.models[model_name] = SparkMethods.classifier_grid_search(**general_params, model=getattr(C, model_name),grid_params=param)
+            self.models[model_name] = SparkMethods.classifier_random_search(**general_params, model=getattr(C, model_name),grid_params=param)
 
 
 class DataLoader:
