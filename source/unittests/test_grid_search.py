@@ -1,16 +1,4 @@
 #%%
-from pyspark.ml import Pipeline
-from pyspark.ml.classification import GBTClassifier, LinearSVC, MultilayerPerceptronClassifier, LogisticRegression
-from pyspark.ml.feature import ChiSqSelector, StringIndexer, OneHotEncoderEstimator, VectorAssembler, MinMaxScaler, IndexToString, SQLTransformer
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-from pyspark.mllib.evaluation import MulticlassMetrics, BinaryClassificationMetrics
-from pyspark.ml import Pipeline
-import os
-import mlflow
-from mlflow.exceptions import MlflowException
-from mlflow.tracking import MlflowClient
-from datetime import date
 from source.functions import SparkMethods, DataLoader, SparkMLBinaryClassifierGridSearch
 
 #%%
@@ -48,43 +36,43 @@ trainingData, testData = SparkMethods.train_test_split(
 
 #%%
 # run: 8 GBT, 8 LSVC, 8 MLPs, 8 LRs, and 8 RandomForests
-models = SparkMLBinaryClassifierGridSearch(trainingData, testData, kfolds=3, 
-    GBT_params = {
-        'maxDepth': [5, 7],
-        'maxBins': [32,48],
-        'maxIter': [25],
-        'stepSize': [0.1, 0.15]
-    },
-    LSVC_params = {
-        'standardization': [True],
-        'aggregationDepth': [5, 10],
-        'regParam': [0.001, 0.01],
-        'maxIter': [25],
-        'tol': [1e-6, 1e-4]
-    },
-    MLP_params = {
-        'layers': [[123, 10, 4, 2]],
-        'blockSize': [5, 10],
-        'stepSize': [0.001, 0.01],
-        'maxIter': [25],
-        'tol': [1e-6, 1e-4]
-    },
-    LR_params = {
-        'standardization': [True],
-        'aggregationDepth': [5, 10],
-        'regParam': [0.001, 0.01],
-        'maxIter': [25],
-        'threshold':[0.5],
-        'elasticNetParam': [0.0],
-        'tol': [1e-6, 1e-4]
-    },
-    RandomForest_params = {
-        'maxDepth': [5],
-        'maxBins': [32, 48],
-        'minInfoGain': [0.0, 0.05],
-        'impurity': ['gini', 'entropy']
-    }
-
-    )
+models = SparkMLBinaryClassifierGridSearch(trainingData, testData, labelCol='label', featuresCol='features', kfolds=3,
+    grid_params={
+        'GBTClassifier': {
+            'maxDepth': [5, 7],
+            'maxBins': [32,48],
+            'maxIter': [25],
+            'stepSize': [0.1, 0.15]
+        },
+        'LinearSVC' : {
+            'standardization': [True],
+            'aggregationDepth': [5, 10],
+            'regParam': [0.001, 0.01],
+            'maxIter': [25],
+            'tol': [1e-6, 1e-4]
+        },
+        'MultilayerPerceptronClassifier': {
+            'layers': [[123, 10, 4, 2]],
+            'blockSize': [5, 10],
+            'stepSize': [0.001, 0.01],
+            'maxIter': [25],
+            'tol': [1e-6, 1e-4]
+        },
+        'LogisticRegression': {
+            'standardization': [True],
+            'aggregationDepth': [5, 10],
+            'regParam': [0.001, 0.01],
+            'maxIter': [25],
+            'threshold':[0.5],
+            'elasticNetParam': [0.0],
+            'tol': [1e-6, 1e-4]
+        },
+        'RandomForestClassifier': {
+            'maxDepth': [5],
+            'maxBins': [32, 48],
+            'minInfoGain': [0.0, 0.05],
+            'impurity': ['gini', 'entropy']
+        }
+    })
 
 #%%
